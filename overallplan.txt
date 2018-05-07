@@ -1,0 +1,28 @@
+Load points
+Generate graph
+Find a path from start to goal
+Prune path
+Fly path
+
+----------------------------------------------------------------------------------------
+
+Keep the velocity in considering bounding distance
+
+----------------------------------------------------------------------------------------
+
+2.5d path
+
+----------------------------------------------------------------------------------------
+
+Land on top
+
+----------------------------------------------------------------------------------------
+
+Reinforcement learning based techniques
+
+----------------------------------------------------------------------------------------
+
+1) a 2d path that considers the height of obstacles in declaring them as obstacles
+a) Uses voronoi or medial
+b) bresenham or the other algo for pruning the paths
+2) receding horizon based path that takes into consideration 2.5d path
