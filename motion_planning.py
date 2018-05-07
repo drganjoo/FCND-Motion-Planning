@@ -9,7 +9,8 @@ from udacidrone import Drone
 from udacidrone.connection import MavlinkConnection, WebSocketConnection  # noqa: F401
 from udacidrone.messaging import MsgID
 
-from planning_utils import StateDiagram, Plot, BoxPath
+from planning_utils import StateDiagram, Plot, BoxPath, GpsLocation
+from planner import Planner
 
 class States(Enum):
     MANUAL = 0
@@ -20,23 +21,28 @@ class States(Enum):
     LANDING = 5
     DISARMING = 6
 
+class PlanResult(Enum):
+    NOT_PLANNED = 0,
+    PLAN_SUCCESS = 1,
+    PLAN_FAILED = 2
+
 class MotionPlanning(Drone):
     def __init__(self, connection):
         super().__init__(connection)
 
         self.in_mission = True
         self.takeoff_altitude = 3.0
-        self.path_planner = BoxPath()
 
         # create state diagram and set the initial state
         self.flight_state, self.state_diagram = self.create_state_diagram()
 
         self.plot = Plot(self)
-        #self.register_callback(MsgID.LOCAL_POSITION, self.log_local_position_callback)
+        self.plan_status = PlanResult.NOT_PLANNED
+        self.planner = Planner()
 
-    # def log_local_position_callback(self):
-    #     self.log.log_data(self.local_position)
+        super().register_callback(MsgID.GLOBAL_POSITION, self.record_initial_gps)
 
+        
     def create_state_diagram(self):
         # each state in the diagram has a condition that checks if the state
         # work is complete and has a transition function
@@ -46,7 +52,14 @@ class MotionPlanning(Drone):
 
         # transition to TAKEOFF, if drone is armed and in ARMING state
         state_diagram.add(States.ARMED, MsgID.STATE, lambda: self.armed, 
-                                self.takeoff_transition)
+                                self.planning_transition)
+
+        # in case we are not able to plan a route for the given states, declare failure
+        # and shutdown
+        state_diagram.add(States.PLANNING, MsgID.STATE, 
+                                lambda: self.plan_status,
+                                PlanResult.PLAN_SUCCESS, self.takeoff_transition,
+                                PlanResult.PLAN_FAILED, self.disarming_transition)
 
         # when the drone reaches the given take off altitude, switch to waypoint
         state_diagram.add(States.TAKEOFF, MsgID.LOCAL_POSITION, 
@@ -67,6 +80,33 @@ class MotionPlanning(Drone):
                                 self.manual_transition)
 
         return States.MANUAL, state_diagram
+
+    def planning_transition(self):
+        self.flight_state = States.PLANNING
+
+        # planner = Planner()
+        # planner.load_map()
+        # planner.set_start_goal(start, goal)
+        # self.path = planner.find_summary_path()
+        # self.receding_path = planner.find_receding_path(self.RECEDING_RADIUS)
+        # self.plan_status = PlanResult.PLAN_SUCCESS
+        self.planner.load_map()
+        pos = self.planner.home_gps_pos
+        self.set_home_position(pos.lon, pos.lat, pos.altitude)
+
+        print("Home location (from planner): ", pos)
+        print("Home location (global_home): ", self.global_home)
+
+        self.plan_status = PlanResult.PLAN_FAILED
+        print("NO PLAN GENERATED")
+        
+    def record_initial_gps(self):
+        pos = super().global_position
+        self.planner.set_initial_gps(GpsLocation(pos[1], pos[0], pos[2]))
+        #print('setting initial gps location')
+        #print(self.planner.init_gps)
+        super().remove_callback(MsgID.GLOBAL_POSITION, self.record_initial_gps)
+
 
     def has_disarmed(self):
         # print('has drone disarmed', self.armed, self.guided)
@@ -89,16 +129,11 @@ class MotionPlanning(Drone):
         if not self.armed:
             self.arm()
 
-        print('Setting home position to', self.global_position)
-        global_pos = self.global_position
-        self.set_home_position(global_pos[0], global_pos[1], global_pos[2])
         self.flight_state = States.ARMED
 
     def takeoff_transition(self):
         self.takeoff(self.takeoff_altitude)
         self.flight_state = States.TAKEOFF
-
-    # def planning_transition(self):
 
     def waypoint_transition(self):
         next_waypoint = self.path_planner.get_next()

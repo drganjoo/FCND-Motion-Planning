@@ -167,3 +167,23 @@ class BoxPath:
 
             return BoxPath.WayPointResult.NOTREACHED
 
+class GpsLocation():
+    def __init__(self, lat, lon, altitude):
+        self._lat = lat
+        self._lon = lon
+        self._altitude = 0
+
+    @property
+    def lat(self):
+        return self._lat
+
+    @property
+    def lon(self):
+        return self._lon
+
+    @property
+    def altitude(self):
+        return self._altitude
+
+    def __repr__(self):
+        return "Lat: {} Lon: {} Altitude {}".format(self.lat, self.lon, self.altitude)
