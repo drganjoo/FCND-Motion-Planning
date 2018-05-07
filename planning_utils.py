@@ -1,146 +1,169 @@
-from enum import Enum
-from queue import PriorityQueue
 import numpy as np
+import visdom
 
+from enum import Enum
+from udacidrone import Drone
+from udacidrone.messaging import MsgID
 
-def create_grid(data, drone_altitude, safety_distance):
-    """
-    Returns a grid representation of a 2D configuration space
-    based on given obstacle data, drone altitude and safety distance
-    arguments.
-    """
+class StateDiagram:
+    """Represents a state diagram. Different flight states are handled behind
+    different callbacks. e.g. when MsgID.State is called, MANUAL, ARMED, DISARMING
+    are checked. Behind MsgID.LocalPosition WAYPOINT flight state is checked. This class
+    helps to consolidate these checks in one place.
+    A dictionary is maintained for each callback. Each key in the dictionary is the 
+    possible flight state and the value holds (a) a condition function to call and (b)
+    another dictionary that tells which transition function to call behind different
+    return values of the condition function."""
+    class StateNode:
+        def __init__(self, condition_fn, result_map):
+            self.condition_fn = condition_fn
+            self.result_map = result_map
 
-    # minimum and maximum north coordinates
-    north_min = np.floor(np.min(data[:, 0] - data[:, 3]))
-    north_max = np.ceil(np.max(data[:, 0] + data[:, 3]))
+    def __init__(self, drone):
+        self.drone = drone
+        self.event_to_state = {}
 
-    # minimum and maximum east coordinates
-    east_min = np.floor(np.min(data[:, 1] - data[:, 4]))
-    east_max = np.ceil(np.max(data[:, 1] + data[:, 4]))
+        drone.register_callback(MsgID.STATE, self.state_callback)
+        drone.register_callback(MsgID.LOCAL_POSITION, self.local_position_callback)
+        drone.register_callback(MsgID.LOCAL_VELOCITY, self.local_velocity_callback)
 
-    # given the minimum and maximum coordinates we can
-    # calculate the size of the grid.
-    north_size = int(np.ceil(north_max - north_min))
-    east_size = int(np.ceil(east_max - east_min))
+    def state_callback(self):
+        if self.drone.in_mission:
+            if MsgID.STATE in self.event_to_state:
+                state_diagram = self.event_to_state[MsgID.STATE]
+                self.call_state_node(state_diagram)
 
-    # Initialize an empty grid
-    grid = np.zeros((north_size, east_size))
+    def local_position_callback(self):
+        if MsgID.LOCAL_POSITION in self.event_to_state:
+            state_diagram = self.event_to_state[MsgID.LOCAL_POSITION]
+            self.call_state_node(state_diagram)
 
-    # Populate the grid with obstacles
-    for i in range(data.shape[0]):
-        north, east, alt, d_north, d_east, d_alt = data[i, :]
-        if alt + d_alt + safety_distance > drone_altitude:
-            obstacle = [
-                int(np.clip(north - d_north - safety_distance - north_min, 0, north_size-1)),
-                int(np.clip(north + d_north + safety_distance - north_min, 0, north_size-1)),
-                int(np.clip(east - d_east - safety_distance - east_min, 0, east_size-1)),
-                int(np.clip(east + d_east + safety_distance - east_min, 0, east_size-1)),
-            ]
-            grid[obstacle[0]:obstacle[1]+1, obstacle[2]:obstacle[3]+1] = 1
+    def local_velocity_callback(self):
+        if MsgID.LOCAL_VELOCITY in self.event_to_state:
+            state_diagram = self.event_to_state[MsgID.LOCAL_VELOCITY]
+            self.call_state_node(state_diagram)
 
-    return grid, int(north_min), int(east_min)
+    def call_state_node(self, state_diagram):
+        # in case there is a state node that would like to work when the 'name' message
+        # arrives, call the condition function, check the return value against the possible
+        # transition functions and in case the return value matches one of the transition 
+        # function, call it
+        if self.drone.flight_state in state_diagram:
+            state_node = state_diagram[self.drone.flight_state]
 
+            # in case there is no condition function, just call the transition
+            # function directly
+            if state_node.condition_fn is None:
+                fn = state_node.result_map[True]
+                fn()
+            else:
+                result = state_node.condition_fn()
+                if result in state_node.result_map:
+                    state_node.result_map[result]()
 
-# Assume all actions cost the same.
-class Action(Enum):
-    """
-    An action is represented by a 3 element tuple.
+    def add(self, flight_state, msg_id, condition_fn, *result_transition):
+        if msg_id not in self.event_to_state:
+            self.event_to_state[msg_id] = {}
 
-    The first 2 values are the delta of the action relative
-    to the current grid position. The third and final value
-    is the cost of performing the action.
-    """
+        state_diagram = self.event_to_state[msg_id]
 
-    WEST = (0, -1, 1)
-    EAST = (0, 1, 1)
-    NORTH = (-1, 0, 1)
-    SOUTH = (1, 0, 1)
+        # warn, in case a given event handler already has a state node for the 
+        # particular flight_state e.g MsgID.State already has work defined for
+        # Manual state, warn the user
+        if flight_state in state_diagram:
+            print("\x1b[32m;State {0} already has a node attached to it".format(flight_state))
 
-    @property
-    def cost(self):
-        return self.value[2]
+        result_map = {}
 
-    @property
-    def delta(self):
-        return (self.value[0], self.value[1])
-
-
-def valid_actions(grid, current_node):
-    """
-    Returns a list of valid actions given a grid and current node.
-    """
-    valid_actions = list(Action)
-    n, m = grid.shape[0] - 1, grid.shape[1] - 1
-    x, y = current_node
-
-    # check if the node is off the grid or
-    # it's an obstacle
-
-    if x - 1 < 0 or grid[x - 1, y] == 1:
-        valid_actions.remove(Action.NORTH)
-    if x + 1 > n or grid[x + 1, y] == 1:
-        valid_actions.remove(Action.SOUTH)
-    if y - 1 < 0 or grid[x, y - 1] == 1:
-        valid_actions.remove(Action.WEST)
-    if y + 1 > m or grid[x, y + 1] == 1:
-        valid_actions.remove(Action.EAST)
-
-    return valid_actions
-
-
-def a_star(grid, h, start, goal):
-
-    path = []
-    path_cost = 0
-    queue = PriorityQueue()
-    queue.put((0, start))
-    visited = set(start)
-
-    branch = {}
-    found = False
-    
-    while not queue.empty():
-        item = queue.get()
-        current_node = item[1]
-        if current_node == start:
-            current_cost = 0.0
-        else:              
-            current_cost = branch[current_node][0]
-            
-        if current_node == goal:        
-            print('Found a path.')
-            found = True
-            break
+        # in case transition function is to be called only on True / False of the
+        # function then put an entry for True->Transition function
+        if condition_fn is None or len(result_transition) == 1:
+            result_map[True] = result_transition[0]
         else:
-            for action in valid_actions(grid, current_node):
-                # get the tuple representation
-                da = action.delta
-                next_node = (current_node[0] + da[0], current_node[1] + da[1])
-                branch_cost = current_cost + action.cost
-                queue_cost = branch_cost + h(next_node, goal)
-                
-                if next_node not in visited:                
-                    visited.add(next_node)               
-                    branch[next_node] = (branch_cost, current_node, action)
-                    queue.put((queue_cost, next_node))
-             
-    if found:
-        # retrace steps
-        n = goal
-        path_cost = branch[n][0]
-        path.append(goal)
-        while branch[n][1] != start:
-            path.append(branch[n][1])
-            n = branch[n][1]
-        path.append(branch[n][1])
-    else:
-        print('**********************')
-        print('Failed to find a path!')
-        print('**********************') 
-    return path[::-1], path_cost
+            result_map = {}
+            for i in range(0, len(result_transition), 2):
+                result_map[result_transition[i]] = result_transition[i+1]
+
+        state_diagram[flight_state] = self.StateNode(condition_fn, result_map)
 
 
+class Plot:
+    def __init__(self, drone):
+        """python -m visdom.server"""
+        self.drone = drone
+        self.viz = visdom.Visdom()
 
-def heuristic(position, goal_position):
-    return np.linalg.norm(np.array(position) - np.array(goal_position))
+        if self.viz.check_connection():
+            X = np.array([[self.drone.local_position[1], self.drone.local_position[0]]])
+
+            self.local_plot = self.viz.scatter(
+                X, opts=dict(
+                    title="Local position (north, east)", 
+                    xlabel='East', 
+                    ylabel='North',
+                    xtickmin=-5,
+                    xtickmax=15,
+                    xtickstep=1,
+                    ytickmin=-5,
+                    ytickmax=15,
+                    ytickstep=1 ,
+                    ))
+
+            drone.register_callback(MsgID.LOCAL_POSITION, self.localpos_callback)
+        else:
+            print('Could not connect to visdom server. Please start server using python -m visdom.server')
+            self.v = None
+
+    def localpos_callback(self):
+        X = np.array([[self.drone.local_position[1], self.drone.local_position[0]]])
+        self.viz.scatter(X, win = self.local_plot, update = 'append')
+
+    @property
+    def is_connected(self):
+        return self.v.check_connection()
+
+
+class BoxPath:
+    """The path drone is suppose to follow is represented by BoxPath. Additionally
+    It is used by the BackyadFlier to get the next waypoint and to figure out if 
+    the current waypoint has been reached or not"""
+    class WayPointResult(Enum):
+        NOTREACHED = 0
+        REACHED = 1
+        PATH_COMPLETE = 2
+
+    def __init__(self):
+        self.all_waypoints = self.calculate_box()
+        self.current_target = []
+
+    def calculate_box(self):
+        # N, E, Alt, Heading
+        distance = 10.0
+        altitude = 3.0
+        
+        return [[distance, 0.0, altitude, 0.0], 
+                [distance, distance, altitude, 0.0], 
+                [0.0, distance, altitude, 0.0], 
+                [0.0, 0.0, altitude, 0.0]]
+
+    def get_next(self):
+        if self.all_waypoints:
+            next_waypoint = self.all_waypoints.pop(0)
+        else:
+            next_waypoint = []
+
+        self.current_target = next_waypoint
+        return next_waypoint
+
+    def is_close_to_current(self, local_position):
+        if not self.current_target:
+            return BoxPath.WayPointResult.PATH_COMPLETE
+        else:
+            # distance = square root of (x2-x1) + (y2-y1)
+            distance = ((self.current_target[0] - local_position[0]) ** 2 
+                        + (self.current_target[1] - local_position[1]) ** 2) ** 0.5
+            if distance < 1:
+                return BoxPath.WayPointResult.REACHED
+
+            return BoxPath.WayPointResult.NOTREACHED
 
