@@ -1,9 +1,15 @@
 import numpy as np
 import visdom
-
+from scipy.spatial import Voronoi
+from bresenham import bresenham
 from enum import Enum
 from udacidrone import Drone
 from udacidrone.messaging import MsgID
+from PIL import Image
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import re
+
 
 class StateDiagram:
     """Represents a state diagram. Different flight states are handled behind
@@ -88,10 +94,13 @@ class StateDiagram:
 
 
 class Plot:
-    def __init__(self, drone):
+    def __init__(self):
         """python -m visdom.server"""
-        self.drone = drone
+        self.drone = None
         self.viz = visdom.Visdom()
+
+    def register_pos_callback(self, drone):
+        self.drone = drone
 
         if self.viz.check_connection():
             X = np.array([[self.drone.local_position[1], self.drone.local_position[0]]])
@@ -109,14 +118,53 @@ class Plot:
                     ytickstep=1 ,
                     ))
 
-            drone.register_callback(MsgID.LOCAL_POSITION, self.localpos_callback)
+            #drone.register_callback(MsgID.LOCAL_POSITION, self.localpos_callback)
         else:
             print('Could not connect to visdom server. Please start server using python -m visdom.server')
             self.v = None
 
     def localpos_callback(self):
+        if self.drone == None:
+            return
+            
         X = np.array([[self.drone.local_position[1], self.drone.local_position[0]]])
         self.viz.scatter(X, win = self.local_plot, update = 'append')
+
+    def show_grid(self, grid, drone_height):
+        # Heighest buildings have dark color
+        non_obstacle = grid == 0
+
+        if grid.max() == 1:
+            # 2d grid has been passed in 
+            image = np.array(grid)
+
+            # show obstacles as black and non-obstacles as white
+            image[image == 1] = 0
+            image[non_obstacle] = 1
+
+            # flip image, equivalent to plt.show(origin=='lower')
+            image = np.flip(image, 0)
+        else:
+            above_height = grid > drone_height
+            below_height = ~above_height ^ non_obstacle
+
+            image = np.zeros((grid.shape[0], grid.shape[1], 3)).astype(np.uint8)
+            image[below_height] = [0, 0, 255]
+            image[above_height] = [255, 0, 0]
+            image[non_obstacle] = [255,255,255]
+
+            # flip image, equivalent to plt.show(origin=='lower')
+            image = np.flip(image, 0)
+
+            # internally for some reason viz is doing a transformation before trying to plot
+            # image. 
+            image = np.transpose(image, (2, 0, 1))
+
+        self.viz.image(image,
+            opts=dict(title='Grid', caption='Grid'))
+
+    def show_3dgrid(self, worldmap, voxel_size = 5):
+        pass
 
     @property
     def is_connected(self):
@@ -187,3 +235,268 @@ class GpsLocation():
 
     def __repr__(self):
         return "Lat: {} Lon: {} Altitude {}".format(self.lat, self.lon, self.altitude)
+
+
+class WorldMap():
+    def __init__(self, filename = 'colliders.csv', safety_distance = 3):
+        self.filename = filename
+        self.home_gps_pos = GpsLocation(0,0,0)
+        self.is_loaded = False
+        self.safety_distance = safety_distance
+        self.data = []
+        self.grid25 = []
+        self.north = []
+        self.east = []
+        self.height = []
+        self.north_min_max = []
+        self.east_min_max = []
+
+    @property
+    def loaded(self):
+        return self.is_loaded
+
+    def load(self):
+        # read the home location saved in the file
+        with open(self.filename) as f:
+            line = f.readline()
+            m = re.match('lat0\s(.*),\slon0\s(.*)', line)
+            if m:
+                self.home_gps_pos = GpsLocation(float(m.group(1)), float(m.group(2)), 0)
+            else:
+                self.home_gps_pos = GpsLocation(0,0,0)
+
+        # read complete data file
+        data = np.loadtxt(self.filename, delimiter=',', dtype='Float64', skiprows=2)
+
+        # top, bottom coordinates
+        self.north = np.array([np.floor(data[:, 0] - data[:, 3]), 
+                        np.ceil(data[:, 0] + data[:, 3])]).T
+
+        # left, right coordinates
+        self.east = np.array([np.floor(data[:, 1] - data[:, 4]),
+                        np.ceil(data[:, 1] + data[:, 4])]).T
+
+        self.height = np.array(np.ceil(data[:, 2] + data[:, 5]))
+        self.data = data
+
+        self.north_min_max = (np.floor(np.amin(self.north[:, 0])),
+                            np.ceil(np.amax(self.north[:, 1])))
+
+        self.east_min_max = (np.floor(np.amin(self.east[:, 0])),
+                            np.ceil(np.amax(self.east[:, 1])))
+
+        print("load_map: Data North Min: {}, Max: {}".format(self.north_min_max[0], self.north_min_max[1]))
+        print("load_map: Data East Min: {}, Max: {}".format(self.east_min_max[0], self.east_min_max[1]))
+        print("load_map: Home Position: {}".format(self.home_gps_pos))
+
+        self.create_grid25()
+
+    def create_grid25(self):
+        """This is more for debugging as we are using graphs and not grid. But this helps in plotting"""
+        # given the minimum and maximum coordinates we can
+        # calculate the size of the grid.
+        north_size = int(np.ceil(self.north_min_max[1] - self.north_min_max[0]))
+        east_size = int(np.ceil(self.east_min_max[1] - self.east_min_max[0]))
+
+        # compute max height of all obstacles, figure out the ones that 
+        # will exceed drone's height (considering drone was about safe_distance lower)
+        #collision_index = self.height > (drone_altitude - safety_distance)
+        collision_index = self.height > 0
+
+        # all obstacles that we can collide with
+        obstacles = self.data[collision_index]
+        
+        # min computation: (obstalce_north - delta - safety) - north_min (to make it 0 based as per range)
+        # max computation: (obstalce_north + delta + safety) - north_min (to make it 0 based as per range) BUT add 1 so that
+        #   when we later on use [o_north_min[i] : o_north_max[i]] the range becomes inclusive
+        o_north_min = np.clip(obstacles[:, 0] - obstacles[:, 3] - self.safety_distance - self.north_min_max[0], 
+                        0, north_size - 1).astype(int)
+        o_north_max = np.clip(obstacles[:, 0] + obstacles[:, 3] + self.safety_distance - self.north_min_max[0] + 1, 
+                        0, north_size).astype(int)
+        o_east_min = np.clip(obstacles[:, 1] - obstacles[:, 4] - self.safety_distance - self.east_min_max[0], 
+                        0, east_size - 1).astype(int)
+        o_east_max = np.clip(obstacles[:, 1] + obstacles[:, 4] + self.safety_distance - self.east_min_max[0] + 1, 0, 
+                        east_size).astype(int)
+
+        grid25 = np.zeros((north_size, east_size))
+
+        # set grid to 1 for all places where this is an obstacle
+        for i in range(0, obstacles.shape[0]):
+            grid25[o_north_min[i] : o_north_max[i], o_east_min[i] : o_east_max[i]] = self.height[i]
+        
+        self.grid25 = grid25
+
+    def create_grid(self, drone_altitude):
+        grid = np.array(self.grid25)
+        grid[grid > 0] = 1
+        
+        # mark all obstacles that are below the drone's height as ok
+        grid[grid < (drone_altitude - self.safety_distance)] = 0
+        return grid
+
+    def create_grid25_height(self, drone_altitude):
+        grid = np.array(self.grid25)
+
+        # mark all obstacles that are below the drone's height as ok
+        grid[self.height < (drone_altitude - self.safety_distance)] = 0
+        return grid
+
+    def create_grid3d(self, voxel_size):
+        """
+        Returns a grid representation of a 3D configuration space
+        based on given obstacle data.
+        
+        The `voxel_size` argument sets the resolution of the voxel map. 
+        """
+        grid25 = self.grid25
+        north_min, north_max = self.north_min_max
+        east_min, east_max = self.east_min_max
+        alt_max = np.amax(self.height)
+        
+        # given the minimum and maximum coordinates we can
+        # calculate the size of the grid.
+        north_size = int(np.ceil((north_max - north_min))) // voxel_size
+        east_size = int(np.ceil((east_max - east_min))) // voxel_size
+        alt_size = int(alt_max) // voxel_size
+
+        voxmap = np.zeros((north_size, east_size, alt_size), dtype=np.bool)
+
+        # all obstacles that we can collide with
+        collision_index = self.height > 0
+        obstacles = self.data[collision_index]
+
+        # min computation: (obstalce_north - delta - safety) - north_min (to make it 0 based as per range)
+        # max computation: (obstalce_north + delta + safety) - north_min (to make it 0 based as per range) BUT add 1 so that
+        #   when we later on use [o_north_min[i] : o_north_max[i]] the range becomes inclusive
+        o_north_min = np.floor(obstacles[:, 0] - obstacles[:, 3] - self.safety_distance - north_min)
+        o_north_max = np.ceil(obstacles[:, 0] + obstacles[:, 3] + self.safety_distance - north_min)
+        o_east_min = np.floor(obstacles[:, 1] - obstacles[:, 4] - self.safety_distance - east_min)
+        o_east_max = np.ceil(obstacles[:, 1] + obstacles[:, 4] + self.safety_distance - east_min)
+        o_alt_max = np.ceil(self.height + self.safety_distance)
+        
+        o_north_min = np.clip(o_north_min // voxel_size, 0, north_size - 1).astype(int)
+        o_north_max = np.clip(o_north_max // voxel_size, 0, north_size - 1).astype(int)
+        o_east_min = np.clip(o_east_min // voxel_size, 0, east_size - 1).astype(int)
+        o_east_max = np.clip(o_east_max // voxel_size, 0, east_size - 1).astype(int)
+        o_alt = np.clip(o_alt_max // voxel_size, 0, alt_size - 1).astype(int)
+        
+        # set grid to 1 for all places where this is an obstacle
+        for i in range(0, obstacles.shape[0]):
+            voxmap[o_north_min[i] : o_north_max[i] + 1, 
+                o_east_min[i] : o_east_max[i] + 1,
+                0 : o_alt[i] + 1] = 1
+
+        return voxmap
+
+# def create_grid(data, drone_altitude, safety_distance):
+#     """
+#     Returns a grid representation of a 2D configuration space
+#     based on given obstacle data, drone altitude and safety distance
+#     arguments.
+#     """
+
+#     # minimum and maximum north coordinates
+#     north_min = np.floor(np.min(data[:, 0] - data[:, 3]))
+#     north_max = np.ceil(np.max(data[:, 0] + data[:, 3]))
+
+#     # minimum and maximum east coordinates
+#     east_min = np.floor(np.min(data[:, 1] - data[:, 4]))
+#     east_max = np.ceil(np.max(data[:, 1] + data[:, 4]))
+
+#     # given the minimum and maximum coordinates we can
+#     # calculate the size of the grid.
+#     north_size = int(np.ceil(north_max - north_min))
+#     east_size = int(np.ceil(east_max - east_min))
+
+#     # Initialize an empty grid
+#     grid = np.zeros((north_size, east_size))
+
+#     # Populate the grid with obstacles
+#     for i in range(data.shape[0]):
+#         north, east, alt, d_north, d_east, d_alt = data[i, :]
+#         if alt + d_alt + safety_distance > drone_altitude:
+#             obstacle = [
+#                 int(np.clip(north - d_north - safety_distance - north_min, 0, north_size-1)),
+#                 int(np.clip(north + d_north + safety_distance - north_min, 0, north_size-1)),
+#                 int(np.clip(east - d_east - safety_distance - east_min, 0, east_size-1)),
+#                 int(np.clip(east + d_east + safety_distance - east_min, 0, east_size-1)),
+#             ]
+#             grid[obstacle[0]:obstacle[1]+1, obstacle[2]:obstacle[3]+1] = 1
+
+#     return grid
+
+# def create_grid_and_edges(data, drone_altitude, safety_distance):
+#     """
+#     Returns a grid representation of a 2D configuration space
+#     along with Voronoi graph edges given obstacle data and the
+#     drone's altitude.
+#     """
+#     # minimum and maximum north coordinates
+#     north_min = np.floor(np.min(data[:, 0] - data[:, 3]))
+#     north_max = np.ceil(np.max(data[:, 0] + data[:, 3]))
+
+#     # minimum and maximum east coordinates
+#     east_min = np.floor(np.min(data[:, 1] - data[:, 4]))
+#     east_max = np.ceil(np.max(data[:, 1] + data[:, 4]))
+
+#     # given the minimum and maximum coordinates we can
+#     # calculate the size of the grid.
+#     north_size = int(np.ceil(north_max - north_min))
+#     east_size = int(np.ceil(east_max - east_min))
+
+#     # Initialize an empty grid
+#     grid = np.zeros((north_size, east_size))
+#     # Initialize an empty list for Voronoi points
+#     points = []
+#     # Populate the grid with obstacles
+#     for i in range(data.shape[0]):
+#         north, east, alt, d_north, d_east, d_alt = data[i, :]
+#         if alt + d_alt + safety_distance > drone_altitude:
+#             obstacle = [
+#                 int(np.clip(north - d_north - safety_distance - north_min, 0, north_size-1)),
+#                 int(np.clip(north + d_north + safety_distance - north_min, 0, north_size-1)),
+#                 int(np.clip(east - d_east - safety_distance - east_min, 0, east_size-1)),
+#                 int(np.clip(east + d_east + safety_distance - east_min, 0, east_size-1)),
+#             ]
+#             grid[obstacle[0]:obstacle[1]+1, obstacle[2]:obstacle[3]+1] = 1
+
+#             # add center of obstacles to points list
+#             points.append([north - north_min, east - east_min])
+
+#     # TODO: create a voronoi graph based on
+#     # location of obstacle centres
+#     graph = Voronoi(points)
+
+#     # TODO: check each edge from graph.ridge_vertices for collision
+#     edges = []
+
+#     # set all vertices that are out of bounds to -1
+#     vertices = graph.vertices.astype(int)
+#     n_z = vertices[:, 0] < 0
+#     e_z = vertices[:, 1] < 0
+#     out_of_bounds = np.where(n_z | e_z)
+#     vertices[out_of_bounds] = np.array([-1, -1])
+    
+#     n_z = vertices[:, 0] >= grid.shape[0]
+#     e_z = vertices[:, 1] >= grid.shape[0]
+#     out_of_bounds = np.where(n_z | e_z)
+#     vertices[out_of_bounds] = np.array([-1, -1])
+
+#     for e in graph.ridge_vertices:
+#         p1 = vertices[e[0]]
+#         p2 = vertices[e[1]]
+        
+#         collision = False
+#         if p1[0] == -1 or p2[0] == -1:
+#             collision = True
+#         else:
+#             cells = bresenham(p1[0], p1[1], p2[0], p2[1])
+#             for c in cells:
+#                 if grid[c[0], c[1]] == 1:
+#                     collision = True
+#                     break
+
+#         if not collision:
+#             edges.append((p1, p2))
+    
+#     return grid, edges

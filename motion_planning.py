@@ -97,6 +97,11 @@ class MotionPlanning(Drone):
         print("Home location (from planner): ", pos)
         print("Home location (global_home): ", self.global_home)
 
+        grid = self.planner.create_grid(5, 3)
+        print(grid.shape)
+        
+        self.plot.show_grid(grid)
+
         self.plan_status = PlanResult.PLAN_FAILED
         print("NO PLAN GENERATED")
         
