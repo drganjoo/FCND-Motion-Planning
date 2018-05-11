@@ -97,7 +97,7 @@ class Plot:
     def __init__(self):
         """python -m visdom.server"""
         self.drone = None
-        self.viz = visdom.Visdom()
+        self.viz = visdom.Visdom()  
 
     def register_pos_callback(self, drone):
         self.drone = drone
@@ -244,16 +244,26 @@ class WorldMap():
         self.is_loaded = False
         self.safety_distance = safety_distance
         self.data = []
-        self.grid25 = []
-        self.north = []
-        self.east = []
+        self._grid25 = []
+        # self.north = []
+        # self.east = []
         self.height = []
-        self.north_min_max = []
+        self.north_min_max = []             # obstacle's north min / max
         self.east_min_max = []
+        self.grid_size = (0, 0)             # grid size in the north, east direction
 
     @property
     def loaded(self):
         return self.is_loaded
+
+    @property
+    def grid25(self):
+        return self._grid25
+
+    def create_grid_forheight(self, drone_altitude):
+        grid = self.create_grid25_forheight(drone_altitude)
+        grid[grid > 0] = 1
+        return grid
 
     def load(self):
         # read the home location saved in the file
@@ -269,21 +279,21 @@ class WorldMap():
         data = np.loadtxt(self.filename, delimiter=',', dtype='Float64', skiprows=2)
 
         # top, bottom coordinates
-        self.north = np.array([np.floor(data[:, 0] - data[:, 3]), 
+        north = np.array([np.floor(data[:, 0] - data[:, 3]), 
                         np.ceil(data[:, 0] + data[:, 3])]).T
 
         # left, right coordinates
-        self.east = np.array([np.floor(data[:, 1] - data[:, 4]),
+        east = np.array([np.floor(data[:, 1] - data[:, 4]),
                         np.ceil(data[:, 1] + data[:, 4])]).T
 
         self.height = np.array(np.ceil(data[:, 2] + data[:, 5]))
         self.data = data
 
-        self.north_min_max = (np.floor(np.amin(self.north[:, 0])),
-                            np.ceil(np.amax(self.north[:, 1])))
+        self.north_min_max = (np.floor(np.amin(north[:, 0])),
+                            np.ceil(np.amax(north[:, 1])))
 
-        self.east_min_max = (np.floor(np.amin(self.east[:, 0])),
-                            np.ceil(np.amax(self.east[:, 1])))
+        self.east_min_max = (np.floor(np.amin(east[:, 0])),
+                            np.ceil(np.amax(east[:, 1])))
 
         print("load_map: Data North Min: {}, Max: {}".format(self.north_min_max[0], self.north_min_max[1]))
         print("load_map: Data East Min: {}, Max: {}".format(self.east_min_max[0], self.east_min_max[1]))
@@ -324,22 +334,15 @@ class WorldMap():
         for i in range(0, obstacles.shape[0]):
             grid25[o_north_min[i] : o_north_max[i], o_east_min[i] : o_east_max[i]] = self.height[i]
         
-        self.grid25 = grid25
+        self._grid25 = grid25
+        self.grid_size = (north_size, east_size)
 
-    def create_grid(self, drone_altitude):
-        grid = np.array(self.grid25)
-        grid[grid > 0] = 1
-        
-        # mark all obstacles that are below the drone's height as ok
-        grid[grid < (drone_altitude - self.safety_distance)] = 0
-        return grid
-
-    def create_grid25_height(self, drone_altitude):
-        grid = np.array(self.grid25)
+    def create_grid25_forheight(self, drone_altitude):
+        grid25_copy = np.array(self._grid25)
 
         # mark all obstacles that are below the drone's height as ok
-        grid[self.height < (drone_altitude - self.safety_distance)] = 0
-        return grid
+        grid25_copy[grid25_copy < (drone_altitude - self.safety_distance)] = 0
+        return grid25_copy
 
     def create_grid3d(self, voxel_size):
         """
@@ -348,7 +351,7 @@ class WorldMap():
         
         The `voxel_size` argument sets the resolution of the voxel map. 
         """
-        grid25 = self.grid25
+        grid25 = self._grid25
         north_min, north_max = self.north_min_max
         east_min, east_max = self.east_min_max
         alt_max = np.amax(self.height)

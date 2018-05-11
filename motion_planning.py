@@ -36,7 +36,7 @@ class MotionPlanning(Drone):
         # create state diagram and set the initial state
         self.flight_state, self.state_diagram = self.create_state_diagram()
 
-        self.plot = Plot(self)
+        self.plot = Plot()
         self.plan_status = PlanResult.NOT_PLANNED
         self.planner = Planner()
 
@@ -96,11 +96,6 @@ class MotionPlanning(Drone):
 
         print("Home location (from planner): ", pos)
         print("Home location (global_home): ", self.global_home)
-
-        grid = self.planner.create_grid(5, 3)
-        print(grid.shape)
-        
-        self.plot.show_grid(grid)
 
         self.plan_status = PlanResult.PLAN_FAILED
         print("NO PLAN GENERATED")
