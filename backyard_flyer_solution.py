@@ -4,14 +4,13 @@ Solution to the Backyard Flyer Project.
 """
 
 import time
-from enum import Enum
-
+import msgpack
 import numpy as np
 
+from enum import Enum
 from udacidrone import Drone
 from udacidrone.connection import MavlinkConnection, WebSocketConnection  # noqa: F401
 from udacidrone.messaging import MsgID
-
 
 class States(Enum):
     MANUAL = 0
@@ -43,6 +42,9 @@ class BackyardFlyer(Drone):
         if self.flight_state == States.TAKEOFF:
             if -1.0 * self.local_position[2] > 0.95 * self.target_position[2]:
                 self.all_waypoints = self.calculate_box()
+
+                self.send_waypoints()
+
                 self.waypoint_transition()
         elif self.flight_state == States.WAYPOINT:
             if np.linalg.norm(self.target_position[0:2] - self.local_position[0:2]) < 1.0:
@@ -114,6 +116,20 @@ class BackyardFlyer(Drone):
         self.stop()
         self.in_mission = False
         self.flight_state = States.MANUAL
+
+    def send_waypoints(self):
+        print("Sending waypoints to simulator ...")
+        wp_int = [[int(wp[0]), int(wp[1]), int(wp[2])] for wp in self.all_waypoints]
+        print(wp_int)
+        print(type(wp_int))
+
+        print('send it using normal integers')
+        wp_int = [[10, 0, 3], [10, 10, 3], [0, 10, 3], [0, 0, 3]]
+        print(wp_int)
+        print(type(wp_int))
+
+        data = msgpack.dumps(wp_int)
+        self.connection._master.write(data)
 
     def start(self):
         self.start_log("Logs", "NavLog.txt")

@@ -171,49 +171,49 @@ class Plot:
         return self.v.check_connection()
 
 
-class BoxPath:
-    """The path drone is suppose to follow is represented by BoxPath. Additionally
-    It is used by the BackyadFlier to get the next waypoint and to figure out if 
-    the current waypoint has been reached or not"""
-    class WayPointResult(Enum):
-        NOTREACHED = 0
-        REACHED = 1
-        PATH_COMPLETE = 2
+# class BoxPath:
+#     """The path drone is suppose to follow is represented by BoxPath. Additionally
+#     It is used by the BackyadFlier to get the next waypoint and to figure out if 
+#     the current waypoint has been reached or not"""
+#     class WayPointResult(Enum):
+#         NOTREACHED = 0
+#         REACHED = 1
+#         PATH_COMPLETE = 2
 
-    def __init__(self):
-        self.all_waypoints = self.calculate_box()
-        self.current_target = []
+#     def __init__(self):
+#         self.all_waypoints = self.calculate_box()
+#         self.current_target = []
 
-    def calculate_box(self):
-        # N, E, Alt, Heading
-        distance = 10.0
-        altitude = 3.0
+#     def calculate_box(self):
+#         # N, E, Alt, Heading
+#         distance = 10.0
+#         altitude = 3.0
         
-        return [[distance, 0.0, altitude, 0.0], 
-                [distance, distance, altitude, 0.0], 
-                [0.0, distance, altitude, 0.0], 
-                [0.0, 0.0, altitude, 0.0]]
+#         return [[distance, 0.0, altitude, 0.0], 
+#                 [distance, distance, altitude, 0.0], 
+#                 [0.0, distance, altitude, 0.0], 
+#                 [0.0, 0.0, altitude, 0.0]]
 
-    def get_next(self):
-        if self.all_waypoints:
-            next_waypoint = self.all_waypoints.pop(0)
-        else:
-            next_waypoint = []
+#     def get_next(self):
+#         if self.all_waypoints:
+#             next_waypoint = self.all_waypoints.pop(0)
+#         else:
+#             next_waypoint = []
 
-        self.current_target = next_waypoint
-        return next_waypoint
+#         self.current_target = next_waypoint
+#         return next_waypoint
 
-    def is_close_to_current(self, local_position):
-        if not self.current_target:
-            return BoxPath.WayPointResult.PATH_COMPLETE
-        else:
-            # distance = square root of (x2-x1) + (y2-y1)
-            distance = ((self.current_target[0] - local_position[0]) ** 2 
-                        + (self.current_target[1] - local_position[1]) ** 2) ** 0.5
-            if distance < 1:
-                return BoxPath.WayPointResult.REACHED
+#     def is_close_to_current(self, local_position):
+#         if not self.current_target:
+#             return BoxPath.WayPointResult.PATH_COMPLETE
+#         else:
+#             # distance = square root of (x2-x1) + (y2-y1)
+#             distance = ((self.current_target[0] - local_position[0]) ** 2 
+#                         + (self.current_target[1] - local_position[1]) ** 2) ** 0.5
+#             if distance < 1:
+#                 return BoxPath.WayPointResult.REACHED
 
-            return BoxPath.WayPointResult.NOTREACHED
+#             return BoxPath.WayPointResult.NOTREACHED
 
 class GpsLocation():
     def __init__(self, lat, lon, altitude):
@@ -236,6 +236,13 @@ class GpsLocation():
     def __repr__(self):
         return "Lat: {} Lon: {} Altitude {}".format(self.lat, self.lon, self.altitude)
 
+    def __getitem__(self, index):
+        if 0 == index:
+            return self._lon
+        elif 1 == index:
+            return self._lat
+        elif 2 == index:
+            return self._altitude
 
 class WorldMap():
     def __init__(self, filename = 'colliders.csv', safety_distance = 3):
@@ -289,11 +296,11 @@ class WorldMap():
         self.height = np.array(np.ceil(data[:, 2] + data[:, 5]))
         self.data = data
 
-        self.north_min_max = (np.floor(np.amin(north[:, 0])),
-                            np.ceil(np.amax(north[:, 1])))
+        self.north_min_max = (int(np.floor(np.amin(north[:, 0]))),
+                            int(np.ceil(np.amax(north[:, 1]))))
 
-        self.east_min_max = (np.floor(np.amin(east[:, 0])),
-                            np.ceil(np.amax(east[:, 1])))
+        self.east_min_max = (int(np.floor(np.amin(east[:, 0]))),
+                            int(np.ceil(np.amax(east[:, 1]))))
 
         print("load_map: Data North Min: {}, Max: {}".format(self.north_min_max[0], self.north_min_max[1]))
         print("load_map: Data East Min: {}, Max: {}".format(self.east_min_max[0], self.east_min_max[1]))

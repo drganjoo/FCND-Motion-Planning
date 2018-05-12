@@ -1,16 +1,22 @@
 import argparse
 import time
+import matplotlib.pyplot as plt
+import numpy as np
+import msgpack
+
 from enum import Enum
 from collections import deque
-
-import numpy as np
-
 from udacidrone import Drone
 from udacidrone.connection import MavlinkConnection, WebSocketConnection  # noqa: F401
 from udacidrone.messaging import MsgID
-
-from planning_utils import StateDiagram, Plot, BoxPath, GpsLocation
+from udacidrone.frame_utils import global_to_local
+from planning_utils import StateDiagram, Plot, GpsLocation
 from planner import Planner
+
+class WayPointResult(Enum):
+    NOTREACHED = 0
+    REACHED = 1
+    PATH_COMPLETE = 2
 
 class States(Enum):
     MANUAL = 0
@@ -40,6 +46,11 @@ class MotionPlanning(Drone):
         self.plan_status = PlanResult.NOT_PLANNED
         self.planner = Planner()
 
+        self.current_waypoint = []
+        self.all_waypoints = []
+
+        self.min_height = 5
+
         super().register_callback(MsgID.GLOBAL_POSITION, self.record_initial_gps)
 
         
@@ -68,8 +79,8 @@ class MotionPlanning(Drone):
         # when one waypoint has been reached, move to the next one BUT if there
         # are no more waypoints then go to landing transition                        
         state_diagram.add(States.WAYPOINT, MsgID.LOCAL_POSITION, self.has_waypoint_reached, 
-                                BoxPath.WayPointResult.REACHED, self.waypoint_transition,
-                                BoxPath.WayPointResult.PATH_COMPLETE, self.landing_transition)
+                                WayPointResult.REACHED, self.waypoint_transition,
+                                WayPointResult.PATH_COMPLETE, self.landing_transition)
 
         # when the drone has landed, go to disarm transition                                
         state_diagram.add(States.LANDING, MsgID.LOCAL_VELOCITY, self.has_landed, 
@@ -91,14 +102,47 @@ class MotionPlanning(Drone):
         # self.receding_path = planner.find_receding_path(self.RECEDING_RADIUS)
         # self.plan_status = PlanResult.PLAN_SUCCESS
         self.planner.load_map()
+
         pos = self.planner.home_gps_pos
         self.set_home_position(pos.lon, pos.lat, pos.altitude)
 
-        print("Home location (from planner): ", pos)
-        print("Home location (global_home): ", self.global_home)
+        print("Setting home to : ", pos)
+        print("global_home: ", self.global_home)
 
-        self.plan_status = PlanResult.PLAN_FAILED
-        print("NO PLAN GENERATED")
+        current_global = self.global_position
+        current_local = global_to_local(self.global_home, current_global)
+
+        print('Local pos: ', current_local)
+
+        # goal state
+        #goal = (-self.planner.north_min + 10, -self.planner.east_min + 10)
+        #self.planner.create_plan()
+
+        start = current_local
+        #goal = (-self.planner.north_min + 10, -self.planner.east_min + 10)
+        goal_gps = GpsLocation(37.794948, -122.396666, 0)
+        goal = global_to_local(goal_gps, self.global_home)
+
+        print('Drone will fly {} to {}'.format(start, goal))
+
+        # TODO: Get a_star path from the planner
+        path, _ = self.planner.plan_route(start, goal)
+
+        # TODO: prune path
+        # TODO: set waypoints
+
+        # fig = plt.figure()
+        # grid = self.planner.create_grid()
+
+        # plt.imshow(grid, cmap='Greys', origin='lower')
+        # plt.scatter(start[1] - self.planner.east_min, start[0] - self.planner.east_min, color='blue')
+        # plt.scatter(goal[1] - self.planner.east_min, goal[0] - self.planner.east_min, color='green')
+
+        # plt.show()
+        self.send_waypoints()
+
+        self.plan_status = PlanResult.PLAN_SUCCESS
+        self.all_waypoints = path
         
     def record_initial_gps(self):
         pos = super().global_position
@@ -121,7 +165,17 @@ class MotionPlanning(Drone):
         return altitude < 0.5 and self.local_velocity[2] < 0.1
 
     def has_waypoint_reached(self):
-        return self.path_planner.is_close_to_current(self.local_position)
+        if not self.current_waypoint:
+            return WayPointResult.PATH_COMPLETE
+    
+        if self.is_close_to_current():
+            return WayPointResult.REACHED
+        else:
+            # resend command
+            # self.cmd_position(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, 0.0)
+            # print(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, 0.0)
+
+            return WayPointResult.NOTREACHED
 
     def arming_transition(self):
         self.take_control()
@@ -136,13 +190,15 @@ class MotionPlanning(Drone):
         self.flight_state = States.TAKEOFF
 
     def waypoint_transition(self):
-        next_waypoint = self.path_planner.get_next()
-        if next_waypoint:
-            # print('Setting command position to: ', *next_waypoint)
-            self.cmd_position(*next_waypoint)
+        if len(self.all_waypoints):
+            self.current_waypoint = self.all_waypoints.pop(0)
+            self.cmd_position(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, 0.0)
             self.flight_state = States.WAYPOINT
             
-            print("transit to waypoint: ", next_waypoint)
+            print("transit to waypoint: ", self.current_waypoint)
+        else:
+            self.current_waypoint = None
+
 
     def landing_transition(self):
         # make sure the drone has stopped moving and then land
@@ -163,6 +219,20 @@ class MotionPlanning(Drone):
         self.flight_state = States.MANUAL
         print('Stop called and manual state set')
         
+    def send_waypoints(self):
+        print("Sending waypoints to simulator ...")
+        wp_int = [[int(wp[0]), int(wp[1]), int(wp[2])] for wp in self.all_waypoints]
+        data = msgpack.dumps(wp_int)
+        self.connection._master.write(data)
+
+    def is_close_to_current(self):
+        distance = ((self.current_waypoint[0] - self.local_position[0]) ** 2 + 
+                    (self.current_waypoint[1] - self.local_position[1]) ** 2 + 
+                    (self.current_waypoint[2] - self.local_position[2]) ** 2) ** 0.5
+
+        print('is_close_to_current', self.local_position, self.current_waypoint, distance)
+        return distance < 1.0
+
     def start(self):
         # no point in creating a log file, telemetry log is created by parent drone class
         # and that has every message in it
