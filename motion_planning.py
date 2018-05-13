@@ -106,6 +106,13 @@ class MotionPlanning(Drone):
         # look for a 3d path through the samples using the 2.5d grid as basis for collision
         # in case the cost of following the 2d path is less than the cost for the 3d
         # keep on following 2d
+        data = self.planner.data
+        zmin = 0
+        # Limit the z axis for the visualization
+        zmax = 10
+
+
+
         pass
 
 
@@ -230,8 +237,11 @@ class MotionPlanning(Drone):
         # print('p2 norm:', np.linalg.norm(p2))
 
         # add a very small number to the norm to not have a division by 0 error        
-        p1_norm = np.linalg.norm(p1) + 1e-6
-        p2_norm = np.linalg.norm(p2) + 1e-6
+        p1_norm = np.linalg.norm(p1)
+        p2_norm = np.linalg.norm(p2)
+
+        if p1_norm == 0 or p2_norm == 0:
+            return 0.0
 
         p1_unit = np.array(p1) / p1_norm
         p2_unit = np.array(p2) / p2_norm
@@ -242,14 +252,16 @@ class MotionPlanning(Drone):
         dot = np.dot(p1_unit, p2_unit)
         # print('dot:', dot)
 
-        heading = np.degrees(np.arccos(dot))
+        # 0 heading means north, where as in degrees we would get 90
+        # so subtracting 90 from the degree
+        heading = 90.0 - np.degrees(np.arccos(dot))
         # print('heading:', heading)
         return heading
         
     def waypoint_transition(self):
         if len(self.all_waypoints):
             owp = self.current_waypoint
-            self.current_waypoint = self.all_waypoints.pop(0)
+            self.current_waypoint, _ = self.all_waypoints.pop(0)
 
             heading = self.calculate_heading(owp, self.current_waypoint)
 
@@ -285,7 +297,7 @@ class MotionPlanning(Drone):
         
     def send_waypoints(self):
         print("Sending waypoints to simulator ...")
-        wp_int = [[int(wp[0]), int(wp[1]), int(wp[2])] for wp in self.all_waypoints]
+        wp_int = [[int(wp[0]), int(wp[1]), int(wp[2])] for wp, _ in self.all_waypoints]
         data = msgpack.dumps(wp_int)
         self.connection._master.write(data)
 

@@ -34,8 +34,16 @@ class Planner():
         return self.worldmap.north_min_max[0]
 
     @property
+    def north_max(self):
+        return self.worldmap.north_min_max[1]
+
+    @property
     def east_min(self):
         return self.worldmap.east_min_max[0]
+
+    @property
+    def east_max(self):
+        return self.worldmap.east_min_max[1]
         
     def set_initial_gps(self, pos):
         self.init_gps = pos
@@ -95,6 +103,9 @@ class Planner():
         print('Pruning path...')
         pruned_path = self.prune_path(path)
 
+        # print(pruned_path)
+        # os.process.exit()
+
         print('Path pruned. Length: ', len(pruned_path))
         return pruned_path, path_cost
 
@@ -129,7 +140,7 @@ class Planner():
             
             graph.add_edge(p1_3d, p2_3d, weight=distance_heuristic(p1_3d, p2_3d))
 
-        graph_nodes_kd = KDTree(self.graph.nodes)
+        graph_nodes_kd = KDTree(graph.nodes)
         return (graph, graph_nodes_kd)
 
     # def point(self, p):
@@ -184,13 +195,13 @@ class Planner():
             # retrace steps
             n = goal
             path_cost = branch[n][0]
-            path.append(goal)
+            path.append((goal, 0))
 
             while branch[n][1] != start:
-                path.append(branch[n][1])
+                path.append((branch[n][1], branch[n][0]))
                 n = branch[n][1]
 
-            path.append(branch[n][1])
+            path.append((branch[n][1], 0))
         else:
             print('**********************')
             print('Failed to find a path!')
@@ -198,7 +209,7 @@ class Planner():
         return path[::-1], path_cost
 
     def prune_path(self, pp):
-        if pp is None:
+        if pp is None or len(pp) < 4:
             return pp
 
         pruned_path = []
@@ -210,11 +221,12 @@ class Planner():
         print(p1)
         print(p2)
         print(p3)
+
         pruned_path.append(p1)
 
         for i in range(2, len(pp)):
             p3 = pp[i]
-            if self.collinearity_check(p1, p2, p3):
+            if self.collinearity_check(p1[0], p2[0], p3[0]):
                 p2 = p3
             else:
                 pruned_path.append(p2)
