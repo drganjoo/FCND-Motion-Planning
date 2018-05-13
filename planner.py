@@ -64,9 +64,6 @@ class Planner():
         # self.graph_nodes_kd is a KDTree to find the nearest nodes
         self.create_voronoi_graph()
 
-        #start = (start3d[0], start3d[1])
-        #goal = (goal3d[0], goal3d[1])
-
         # find the closes node to the start and goal
         # indices = self.graph_nodes_kd.query_radius([start, goal], 
         #                         r = self.STATE_RADIUS, 
@@ -80,23 +77,27 @@ class Planner():
         # print('index 0:', indices[0])
         # print('index 1:', indices[1])
 
+        # find the closest node to the start and goal states
+
         graph_list = list(self.graph)
 
         c_start = graph_list[indices[0][0]]
         c_goal = graph_list[indices[1][0]]
 
-        print('Closest Start: ', c_start)
-        print('Closest Goal: ', c_goal)
+        # print('Closest Start: ', c_start)
+        # print('Closest Goal: ', c_goal)
 
-        print('Running a_star')
+        # print('Running a_star')
         path, path_cost = self.a_star_graph(self.graph, distance_heuristic, c_start, c_goal)
+        print('a_star returned {} nodes'.format(len(path)))
 
-        print('a_star returned', path)
+        # prune path
+        print('Pruning path...')
+        pruned_path = self.prune_path(path)
 
-        # TODO: find a path from close_start to close_goal and then 
-        # add the final goal and start to the path and return that
+        print('Path pruned. Length: ', len(pruned_path))
 
-        return path, path_cost
+        return pruned_path, path_cost
 
 
     def create_grid(self):
@@ -197,35 +198,34 @@ class Planner():
             print('**********************') 
         return path[::-1], path_cost
 
-    # def prune_edges(self, edges):
-    #     if path is None:
-    #         return path
+    def prune_path(self, pp):
+        if pp is None:
+            return pp
 
-    #     pruned_path = []
+        pruned_path = []
         
-    #     # TODO: this following should have been a one liner numpy multiply
-    #     pp = make_3d(path)
-    #     p1 = pp[0]
-    #     p2 = pp[1]
-    #     p3 = pp[2]
+        p1 = pp[0]
+        p2 = pp[1]
+        p3 = pp[2]
 
-    #     print(p1)
-    #     print(p2)
-    #     print(p3)
-    #     pruned_path.append(p1)
+        print(p1)
+        print(p2)
+        print(p3)
+        pruned_path.append(p1)
 
-    #     for i in range(2, len(pp)):
-    #         p3 = pp[i]
-    #         if collinearity_check(p1, p2, p3):
-    #             p2 = p3
-    #         else:
-    #             pruned_path.append(p2)
-    #             p1 = p2
-    #             p2 = p3
+        for i in range(2, len(pp)):
+            p3 = pp[i]
+            if self.collinearity_check(p1, p2, p3):
+                p2 = p3
+            else:
+                pruned_path.append(p2)
+                p1 = p2
+                p2 = p3
         
-    #     pruned_path.append(p3)
-    #     return np.delete(np.array(pruned_path), 2, axis=1)
-
+        pruned_path.append(p3)
+        # delete the 3rd dimension
+        #return np.delete(np.array(pruned_path), 2, axis=1)
+        return pruned_path
 
     def generate_receding_plan(self):
         """This generates a plan using 2d map"""
