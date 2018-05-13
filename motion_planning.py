@@ -12,6 +12,7 @@ from udacidrone.messaging import MsgID
 from udacidrone.frame_utils import global_to_local
 from planning_utils import StateDiagram, Plot, GpsLocation
 from planner import Planner
+from shapely.geometry import Polygon, Point
 
 class WayPointResult(Enum):
     NOTREACHED = 0
@@ -49,7 +50,9 @@ class MotionPlanning(Drone):
         self.current_waypoint = (0,0,0)
         self.all_waypoints = []
 
-        self.min_height = 5
+        self.min_altitude = 5
+        self.max_altitude = 50
+
         self.path2d = []                  # 2d path returned by the planner
 
         super().register_callback(MsgID.GLOBAL_POSITION, self.record_initial_gps)
@@ -97,6 +100,7 @@ class MotionPlanning(Drone):
 
         return States.MANUAL, state_diagram
 
+
     def generate_3dpath(self):
         # draw random sample of points in 3d
         # find the farthest point in the 2d path that is in radius of given 3d path
@@ -106,14 +110,36 @@ class MotionPlanning(Drone):
         # look for a 3d path through the samples using the 2.5d grid as basis for collision
         # in case the cost of following the 2d path is less than the cost for the 3d
         # keep on following 2d
-        data = self.planner.data
-        zmin = 0
-        # Limit the z axis for the visualization
-        zmax = 10
 
+        num_samples = 50
 
+        north_size = int(np.ceil(self.planner.north_max - self.planner.north_max))
+        east_size = int(np.ceil(self.planner.east_max - self.planner.east_min))
 
-        pass
+        radius = 25
+        n_min, n_max = self.local_position[0] - radius, self.local_position[0] + radius
+        e_min, e_max = self.local_position[1] - radius, self.local_position[1] + radius
+
+        nvals = np.random.uniform(n_min, n_max, num_samples)
+        evals = np.random.uniform(e_min, e_max, num_samples)
+        zvals = np.random.uniform(self.min_altitude, self.max_altitude, num_samples)
+
+        samples = list(zip(nvals, evals, zvals))
+        print(samples)
+
+        t0 = time.time()
+        to_keep = []
+
+        grid25 = self.planner.grid25
+
+        for p in samples:
+            gp = grid25[p[0], p[1]]
+            if gp == 0 and gp < self.max_altitude:
+                to_keep.append(p)
+                    
+        time_taken = time.time() - t0
+        print("Time taken {0} seconds ...", time_taken)
+        print(to_keep)
 
 
     def planning_transition(self):
@@ -168,7 +194,9 @@ class MotionPlanning(Drone):
         else:
             print("Could not plan a path for the given start and goal state")
             self.plan_status = PlanResult.PLAN_FAILED
-            
+
+        self.generate_3dpath()    
+        self.plan_status = PlanResult.PLAN_FAILED
         # self.plan_status = PlanResult.PLAN_FAILED
         
     def record_initial_gps(self):
@@ -268,7 +296,7 @@ class MotionPlanning(Drone):
             # (y2 - y1) / (x2 - x1) (conver to radians)
             #vector_other_pt = (self.current_waypoint[1] - owp[1])/(self.current_waypoint[0] - owp[0])
 
-            self.cmd_position(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, heading)
+            self.cmd_position(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_altitude, heading)
             self.flight_state = States.WAYPOINT
             
             print("transit to waypoint: ", self.current_waypoint)

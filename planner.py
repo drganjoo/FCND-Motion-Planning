@@ -44,7 +44,15 @@ class Planner():
     @property
     def east_max(self):
         return self.worldmap.east_min_max[1]
-        
+    
+    @property
+    def data(self):
+        return self.worldmap.data
+
+    @property
+    def grid25(self):
+        return self.worldmap.grid25
+
     def set_initial_gps(self, pos):
         self.init_gps = pos
 
