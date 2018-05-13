@@ -50,6 +50,7 @@ class MotionPlanning(Drone):
         self.all_waypoints = []
 
         self.min_height = 5
+        self.path2d = []                  # 2d path returned by the planner
 
         super().register_callback(MsgID.GLOBAL_POSITION, self.record_initial_gps)
     
@@ -96,6 +97,18 @@ class MotionPlanning(Drone):
 
         return States.MANUAL, state_diagram
 
+    def generate_3dpath(self):
+        # draw random sample of points in 3d
+        # find the farthest point in the 2d path that is in radius of given 3d path
+        #   and consider that as goal
+        # start location is the current location of the drone
+        # add all random points in a graph
+        # look for a 3d path through the samples using the 2.5d grid as basis for collision
+        # in case the cost of following the 2d path is less than the cost for the 3d
+        # keep on following 2d
+        pass
+
+
     def planning_transition(self):
         self.flight_state = States.PLANNING
 
@@ -130,7 +143,7 @@ class MotionPlanning(Drone):
         print('Drone will fly {} to {}'.format(start, goal))
 
         # get a pruned, a_starred path from the planner
-        path, _ = self.planner.plan_route(start, goal)
+        self.path2d, _ = self.planner.plan_route(start, goal)
 
         # fig = plt.figure()
         # grid = self.planner.create_grid()
@@ -140,8 +153,8 @@ class MotionPlanning(Drone):
         # plt.scatter(goal[1] - self.planner.east_min, goal[0] - self.planner.east_min, color='green')
 
         # plt.show()
-        if len(path) > 0:
-            self.all_waypoints = path
+        if len(self.path2d) > 0:
+            self.all_waypoints = self.path2d
             self.send_waypoints()
 
             self.plan_status = PlanResult.PLAN_SUCCESS
