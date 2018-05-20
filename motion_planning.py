@@ -1,6 +1,6 @@
 import argparse
 import time
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import numpy as np
 import msgpack
 
@@ -37,6 +37,8 @@ class MotionPlanning(Drone):
     def __init__(self, connection):
         super().__init__(connection)
 
+        self.WAYPOINT_HIT_RADIUS = 5.0
+
         self.in_mission = True
         self.takeoff_altitude = 3.0
 
@@ -47,21 +49,18 @@ class MotionPlanning(Drone):
         self.plan_status = PlanResult.NOT_PLANNED
         self.planner = Planner()
 
-        self.current_waypoint = (0,0,0)
-        self.all_waypoints = []
+        self.current_waypoint = (0,0,0)         # current waypoint to be followed
+        self.current_wp_index = 0               # index into the waypoint np.array
+        self.all_waypoints = []                 # all waypoints computed by the planner
 
         self.min_altitude = 5
         self.max_altitude = 50
 
-        self.path2d = []                  # 2d path returned by the planner
+        self.path2d_with_cost = []              # 2d path returned by the planner. This has the cost
+                                                # of reaching goal from each state. Is used for 3d planning
 
         super().register_callback(MsgID.GLOBAL_POSITION, self.record_initial_gps)
     
-    # @property
-    # def global_pos_ned(self):
-    #     #return global_to_local(self.global_position, self.global_home)
-    #     return self.local_position
-
     def create_state_diagram(self):
         # each state in the diagram has a condition that checks if the state
         # work is complete and has a transition function
@@ -101,56 +100,12 @@ class MotionPlanning(Drone):
         return States.MANUAL, state_diagram
 
 
-    def generate_3dpath(self):
-        # draw random sample of points in 3d
-        # find the farthest point in the 2d path that is in radius of given 3d path
-        #   and consider that as goal
-        # start location is the current location of the drone
-        # add all random points in a graph
-        # look for a 3d path through the samples using the 2.5d grid as basis for collision
-        # in case the cost of following the 2d path is less than the cost for the 3d
-        # keep on following 2d
-
-        num_samples = 50
-
-        north_size = int(np.ceil(self.planner.north_max - self.planner.north_max))
-        east_size = int(np.ceil(self.planner.east_max - self.planner.east_min))
-
-        radius = 25
-        n_min, n_max = self.local_position[0] - radius, self.local_position[0] + radius
-        e_min, e_max = self.local_position[1] - radius, self.local_position[1] + radius
-
-        nvals = np.random.uniform(n_min, n_max, num_samples)
-        evals = np.random.uniform(e_min, e_max, num_samples)
-        zvals = np.random.uniform(self.min_altitude, self.max_altitude, num_samples)
-
-        samples = list(zip(nvals, evals, zvals))
-        print(samples)
-
-        t0 = time.time()
-        to_keep = []
-
-        grid25 = self.planner.grid25
-
-        for p in samples:
-            gp = grid25[p[0], p[1]]
-            if gp == 0 and gp < self.max_altitude:
-                to_keep.append(p)
-                    
-        time_taken = time.time() - t0
-        print("Time taken {0} seconds ...", time_taken)
-        print(to_keep)
-
-
     def planning_transition(self):
+        print('planning_transition')
+
         self.flight_state = States.PLANNING
 
-        # planner = Planner()
-        # planner.load_map()
-        # planner.set_start_goal(start, goal)
-        # self.path = planner.find_summary_path()
-        # self.receding_path = planner.find_receding_path(self.RECEDING_RADIUS)
-        # self.plan_status = PlanResult.PLAN_SUCCESS
+        print('Loading map...')
         self.planner.load_map()
 
         pos = self.planner.home_gps_pos
@@ -159,24 +114,27 @@ class MotionPlanning(Drone):
         print("Setting home to : ", pos)
         print("global_home: ", self.global_home)
 
+        # local position of the drone
+
         current_global = self.global_position
         current_local = global_to_local(current_global, self.global_home)
 
+        start = current_local
+
         print('Local pos: ', current_local)
 
-        # goal state
         #goal = (-self.planner.north_min + 10, -self.planner.east_min + 10)
-        #self.planner.create_plan()
 
-        start = current_local
-        #goal = (-self.planner.north_min + 10, -self.planner.east_min + 10)
-        goal_gps = GpsLocation(37.794948, -122.396666, 0)
+        goal_gps = GpsLocation(37.79489867, -122.39687191, 0)
         goal = global_to_local(goal_gps, self.global_home)
+        goal = np.array([int(goal[0]), int(goal[1]), 0])
 
         print('Drone will fly {} to {}'.format(start, goal))
 
         # get a pruned, a_starred path from the planner
-        self.path2d, _ = self.planner.plan_route(start, goal)
+        
+        print('Finding a plan...')
+        self.path2d_with_cost = self.planner.plan_route(start, goal)
 
         # fig = plt.figure()
         # grid = self.planner.create_grid()
@@ -186,8 +144,10 @@ class MotionPlanning(Drone):
         # plt.scatter(goal[1] - self.planner.east_min, goal[0] - self.planner.east_min, color='green')
 
         # plt.show()
-        if len(self.path2d) > 0:
-            self.all_waypoints = self.path2d
+        if len(self.path2d_with_cost) > 0:
+            print('Plan found')
+
+            self.all_waypoints = np.array(self.path2d_with_cost)[:, :3]
             self.send_waypoints()
 
             self.plan_status = PlanResult.PLAN_SUCCESS
@@ -195,9 +155,13 @@ class MotionPlanning(Drone):
             print("Could not plan a path for the given start and goal state")
             self.plan_status = PlanResult.PLAN_FAILED
 
-        self.generate_3dpath()    
-        self.plan_status = PlanResult.PLAN_FAILED
+        #self.generate_3dpath()
         # self.plan_status = PlanResult.PLAN_FAILED
+
+        # debug
+        # self.all_waypoints = np.array([start, goal])
+        # self.send_waypoints()
+        #self.plan_status = PlanResult.PLAN_SUCCESS
         
     def record_initial_gps(self):
         pos = super().global_position
@@ -212,37 +176,41 @@ class MotionPlanning(Drone):
         return not (self.armed or self.guided)
 
     def has_reached_altitude(self):
-        #altitude = -1.0 * self.local_position[2]
         # TODO check code in udacridrone to figure out how local_position is being computed.
-        # Right now using global_pos to convert to local as message on slack from @Krishna says:
+        # There is a message on slack from @Krishna that says not to use local_position:
         # "Many people were confused about the above, Ryan later confirmed that we should not 
         # rely on `self.local_position` and rather calculate `local_pos` ourselves using the 
         # function to convert `self.global_position` (which is trustable)."
 
-        # print('local_pos from the parent: {} and computed {}'.format(self.local_position, self.global_pos_ned))
         altitude = -1.0 * self.local_position[2]
-        return altitude > 0.95 * self.takeoff_altitude
+        return altitude > 0.90 * self.current_waypoint[2]
 
     def has_landed(self):
-        altitude = -1.0 * self.local_position[2]
-        # altitude = -1.0 * self.global_pos_ned[2]
-        return altitude < 0.5 and self.local_velocity[2] < 0.1
+        print('has_landed')
+
+        # check difference between desired altitude and our current altitude
+        # return true in case the difference is < 0.5 and our velocity is < 0.1
+        altitude = -self.local_position[2]
+        desired = -self.current_waypoint[2]
+
+        diff = np.abs(desired - altitude)
+        return diff < 0.5 and self.local_velocity[2] < 0.1
 
     def has_waypoint_reached(self):
-        if not self.current_waypoint:
+        if self.current_wp_index >= len(self.all_waypoints):
+            print("Path is complete. Returning WayPointResult.PATH_COMPLETE")
             return WayPointResult.PATH_COMPLETE
+
+        # resend command in case the waypoint has not been reached
+        # self.cmd_position(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, 0.0)
+        # print(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, 0.0)
     
-        ret = self.is_close_to_current()
-        # print('is_close return: ', ret)
-
-        if ret:
-            return WayPointResult.REACHED
-        else:
-            # resend command
-            # self.cmd_position(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, 0.0)
-            # print(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_height, 0.0)
-
-            return WayPointResult.NOTREACHED
+        # print('Is close to current: {}. Local pos: {}. Current: {}'.format(
+        #     self.is_close_to_current(), 
+        #     self.local_position,
+        #     self.current_waypoint))
+        
+        return WayPointResult.REACHED if  self.is_close_to_current() else WayPointResult.NOTREACHED
 
     def arming_transition(self):
         self.take_control()
@@ -253,7 +221,13 @@ class MotionPlanning(Drone):
         self.flight_state = States.ARMED
 
     def takeoff_transition(self):
-        self.takeoff(self.takeoff_altitude)
+        print('takeoff_transition to {} meters'.format(self.takeoff_altitude))
+        # set current waypoint at a higher / lower altitude than we currently are
+        self.current_waypoint = (self.local_position[0], 
+                            self.local_position[1], 
+                            self.takeoff_altitude)
+
+        self.takeoff(self.current_waypoint[2])
         self.flight_state = States.TAKEOFF
 
     def calculate_heading(self, p1, p2):
@@ -264,51 +238,64 @@ class MotionPlanning(Drone):
         # print('p1 norm:', np.linalg.norm(p1))
         # print('p2 norm:', np.linalg.norm(p2))
 
-        # add a very small number to the norm to not have a division by 0 error        
-        p1_norm = np.linalg.norm(p1)
-        p2_norm = np.linalg.norm(p2)
-
-        if p1_norm == 0 or p2_norm == 0:
-            return 0.0
-
-        p1_unit = np.array(p1) / p1_norm
-        p2_unit = np.array(p2) / p2_norm
-
-        # print('p1_unit:', p1_unit)
-        # print('p2_unit:', p2_unit)
-
-        dot = np.dot(p1_unit, p2_unit)
-        # print('dot:', dot)
-
-        # 0 heading means north, where as in degrees we would get 90
-        # so subtracting 90 from the degree
-        heading = 90.0 - np.degrees(np.arccos(dot))
-        # print('heading:', heading)
+        heading = np.arctan2((p2[1]-p1[1]), (p2[0]-p1[0]))
+        print('Heading: ', heading)
         return heading
+
+        # # add a very small number to the norm to not have a division by 0 error
+        # p1_norm = np.linalg.norm(p1)
+        # p2_norm = np.linalg.norm(p2)
+
+        # if p1_norm == 0 or p2_norm == 0:
+        #     return 0.0
+
+        # p1_unit = np.array(p1) / p1_norm
+        # p2_unit = np.array(p2) / p2_norm
+
+        # # print('p1_unit:', p1_unit)
+        # # print('p2_unit:', p2_unit)
+
+        # dot = np.dot(p1_unit, p2_unit)
+        # # print('dot:', dot)
+
+        # # 0 heading means north, where as in degrees we would get 90
+        # # so subtracting 90 from the degree
+        # heading = 90.0 - np.degrees(np.arccos(dot))
+        # # print('heading:', heading)
+        # return heading
         
     def waypoint_transition(self):
-        if len(self.all_waypoints):
+        print('waypoint_transition')
+
+        if self.current_wp_index < len(self.all_waypoints):
             owp = self.current_waypoint
-            self.current_waypoint, _ = self.all_waypoints.pop(0)
+            self.current_waypoint = self.all_waypoints[self.current_wp_index]
+            self.current_wp_index += 1
 
             heading = self.calculate_heading(owp, self.current_waypoint)
 
             # (y2 - y1) / (x2 - x1) (conver to radians)
             #vector_other_pt = (self.current_waypoint[1] - owp[1])/(self.current_waypoint[0] - owp[0])
 
-            self.cmd_position(int(self.current_waypoint[0]), int(self.current_waypoint[1]), self.min_altitude, heading)
+            self.cmd_position(self.current_waypoint[0], 
+                            self.current_waypoint[1], 
+                            -self.current_waypoint[2], 
+                            heading)
             self.flight_state = States.WAYPOINT
             
-            print("transit to waypoint: ", self.current_waypoint)
+            #print("transit to waypoint: ", self.current_waypoint)
         else:
             self.current_waypoint = None
 
-
     def landing_transition(self):
+        print('landing_transition')
         # make sure the drone has stopped moving and then land
         if ((self.local_velocity[0] + self.local_velocity[1]) ** 2.0) ** 0.5 < .1:
+            print('Velocity is ok. Going to land')
             self.land()
             self.flight_state = States.LANDING
+        else:
+            print('Waiting for drone to slow down')
 
     def disarming_transition(self):
         print('disarming')
@@ -325,8 +312,10 @@ class MotionPlanning(Drone):
         
     def send_waypoints(self):
         print("Sending waypoints to simulator ...")
-        wp_int = [[int(wp[0]), int(wp[1]), int(wp[2])] for wp, _ in self.all_waypoints]
-        data = msgpack.dumps(wp_int)
+        wp  = self.all_waypoints.astype(int).tolist()
+        print(wp)
+
+        data = msgpack.dumps(wp)
         self.connection._master.write(data)
 
     def is_close_to_current(self):
@@ -338,7 +327,7 @@ class MotionPlanning(Drone):
                     (self.current_waypoint[2] - pos[2]) ** 2) ** 0.5
 
         # print('is_close_to_current: ', self.local_position, self.current_waypoint, distance)
-        return distance < 2.0
+        return distance < self.WAYPOINT_HIT_RADIUS
 
     def start(self):
         # no point in creating a log file, telemetry log is created by parent drone class

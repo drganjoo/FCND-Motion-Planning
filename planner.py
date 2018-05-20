@@ -2,6 +2,7 @@ import time
 import re
 import numpy as np
 import networkx as nx
+# import matplotlib.pyplot as plt
 
 from shapely.geometry import Polygon, Point, LineString
 from sklearn.neighbors import KDTree
@@ -10,6 +11,8 @@ from scipy.spatial import Voronoi, voronoi_plot_2d
 from bresenham import bresenham
 from queue import PriorityQueue
 from udacidrone.frame_utils import global_to_local
+from action_based_plan import ActionPlanner
+from PIL import Image, ImageDraw
 
 def distance_heuristic(n1, n2):
     return np.linalg.norm((n1, n2))
@@ -26,28 +29,28 @@ class Planner():
         self.graph = None               # nx.Graph
         self.start3d = (0, 0, 0)
         self.goal3d = (0, 0, 0)
+        self.plot = Plot()
+        self.obstacle_tree = None
 
-        self.STATE_RADIUS = 10.0
+    # @property
+    # def north_min(self):
+    #     return self.worldmap.north_min_max[0]
 
-    @property
-    def north_min(self):
-        return self.worldmap.north_min_max[0]
+    # @property
+    # def north_max(self):
+    #     return self.worldmap.north_min_max[1]
 
-    @property
-    def north_max(self):
-        return self.worldmap.north_min_max[1]
+    # @property
+    # def east_min(self):
+    #     return self.worldmap.east_min_max[0]
 
-    @property
-    def east_min(self):
-        return self.worldmap.east_min_max[0]
-
-    @property
-    def east_max(self):
-        return self.worldmap.east_min_max[1]
+    # @property
+    # def east_max(self):
+    #     return self.worldmap.east_min_max[1]
     
-    @property
-    def data(self):
-        return self.worldmap.data
+    # @property
+    # def data(self):
+    #     return self.worldmap.data
 
     @property
     def grid25(self):
@@ -61,13 +64,19 @@ class Planner():
         self.home_gps_pos = self.worldmap.home_gps_pos
         self.create_obstacle_tree()
 
+        print("[Planner] Home Gps Location: {}".format(self.home_gps_pos))
+
     def create_obstacle_tree(self):
         data = self.worldmap.data
-        collision_index = self.worldmap.height > self.min_drone_altitude - self.safety_distance
+
+        # figure out which possible obstacles might we collide with at the minimum altitude
+        height = np.array(np.ceil(data[:, 2] + data[:, 5]))
+        collision_index = height > self.min_drone_altitude - self.safety_distance
 
         # all obstacles that we can collide with
-        data_collidable = data[collision_index]
-        centers = np.dstack((data_collidable[:, 0], data_collidable[:, 1])).squeeze()
+        obstacles = data[collision_index]
+        
+        centers = np.dstack((obstacles[:, 0], obstacles[:, 1])).squeeze()
         centers = centers.astype(int)
 
         self.obstacle_tree = KDTree(centers)
@@ -76,15 +85,10 @@ class Planner():
         self.start3d = start3d
         self.goal3d = goal3d
 
-        # self.graph will contain the graph
-        # self.graph_nodes_kd is a KDTree to find the nearest nodes
-        self.graph, self.graph_nodes_kd = self.create_voronoi_graph()
+        # Create voronoi graph to create a 2d path
+        self.graph, self.graph_nodes_kd = self.create_voronoi_graph()  # graph and its KD
 
-        # find the closes node to the start and goal
-        # indices = self.graph_nodes_kd.query_radius([start, goal], 
-        #                         r = self.STATE_RADIUS, 
-        #                         return_distance = False)
-
+        # find the closest location on the graph that matches the start and the goal states
         indices = self.graph_nodes_kd.query([start3d, goal3d], 
                                 k = 1, 
                                 return_distance = False)
@@ -97,16 +101,15 @@ class Planner():
 
         graph_list = list(self.graph)
 
-        c_start = graph_list[indices[0][0]]
-        c_goal = graph_list[indices[1][0]]
+        self.c_start = graph_list[indices[0][0]]
+        self.c_goal = graph_list[indices[1][0]]
 
-        # print('Closest Start: ', c_start)
-        # print('Closest Goal: ', c_goal)
+        print('Closest To Start {} is {}'.format(start3d, self.c_start))
+        print('Closest To Goal {} is {} '.format(goal3d, self.c_goal))
 
-        # print('Running a_star')
-        path, path_cost = self.a_star_graph(self.graph, distance_heuristic, c_start, c_goal)
-        print('a_star returned {} nodes'.format(len(path)))
-
+        print('Running a_star')
+        path = self.a_star_graph(self.graph, distance_heuristic, self.c_start, self.c_goal)
+        
         # prune path
         print('Pruning path...')
         pruned_path = self.prune_path(path)
@@ -115,41 +118,155 @@ class Planner():
         # os.process.exit()
 
         print('Path pruned. Length: ', len(pruned_path))
-        return pruned_path, path_cost
+
+        # use action based planner in the end to reach the goal state, specially the
+        # height of the goal
+
+        close = np.abs(goal3d - self.c_goal) < 0.1
+        if not close.all():
+            print("Since closest goal is not on the graph, using action based planner for last node...")
+            print("Original goal: {}, closest: {}".format(goal3d, self.c_goal))
+
+            ap = ActionPlanner(self.grid25, self.max_drone_altitude)
+            path = ap.find_path(tuple(self.c_goal), tuple(self.goal3d))
+
+            if len(path) > 0:
+                # print('adding action based plan at the end of the pruned path')
+                print('Action Path: ', path)
+                # print('Before adding pruned path:', pruned_path)
+
+                pruned_path.extend(path)
+
+                # print('-' * 100)
+                # print(pruned_path)
+
+        return pruned_path
 
 
     def create_grid(self):
-        return self.worldmap.create_grid_forheight(self.min_drone_altitude)
+        grid25 = self.grid25
+        return grid25.create_binary(self.min_drone_altitude)
 
     def convert_edges_tomap(self, edges):
-        n_min = self.north_min
-        e_min = self.east_min
+        n_min = self.worldmap.north_min
+        e_min = self.worldmap.east_min
 
         # Voronoi edges are 0 based as per the grid that was given to it
         # we need to convert it back to world coordinates in the map
-        edges_w = []
-        for p1, p2 in edges:
-            p1_w = (p1[0] + n_min, p1[1] + e_min)
-            p2_w = (p2[0] + n_min, p2[1] + e_min)
-            edges_w.append((p1_w, p2_w))
+        # edges_w = []
+        # for p1, p2 in edges:
+        #     p1_w = (p1[0] + n_min, p1[1] + e_min)
+        #     p2_w = (p2[0] + n_min, p2[1] + e_min)
+        #     edges_w.append((p1_w, p2_w))
         
+        # make a copy of edges
+        edges_w = np.array(edges)
+
+        edges_w[:, 0] += n_min
+        edges_w[:, 1] += e_min
+        edges_w[:, 2] += n_min
+        edges_w[:, 3] += e_min
+
         return edges_w
 
     def create_voronoi_graph(self):
         edges = self.get_voronoi_edges()
+
+        # conver the edges back to the map coordinate space (<0 based)
         edges_w = self.convert_edges_tomap(edges)
 
         graph = nx.Graph()
 
         # add altitude to each 2d edge returned by voronoi edges
-        for p1, p2 in edges_w:
-            p1_3d = (p1[0], p1[1], -self.min_drone_altitude)
-            p2_3d = (p2[0], p2[1], -self.min_drone_altitude)
+        # for p1, p2 in edges_w:
+        #     p1_3d = (p1[0], p1[1], -self.min_drone_altitude)
+        #     p2_3d = (p2[0], p2[1], -self.min_drone_altitude)
+        #     weight = np.sum((np.array(p2_3d) - np.array(p1_3d)) ** 2) ** 0.5
             
-            graph.add_edge(p1_3d, p2_3d, weight=distance_heuristic(p1_3d, p2_3d))
+        for p1_north, p1_east, p2_north, p2_east in edges_w:
+            p1_3d = (p1_north, p1_east, -self.min_drone_altitude)
+            p2_3d = (p2_north, p2_east, -self.min_drone_altitude)
+            weight = np.sum((np.array(p2_3d) - np.array(p1_3d)) ** 2) ** 0.5
+
+            graph.add_edge(p1_3d, p2_3d, weight=weight)
+
+            #print('vor: distance between {} and {} = {}'.format(p1_3d, p2_3d, weight))
+
+        # self.plot_vedges(edges)
 
         graph_nodes_kd = KDTree(graph.nodes)
         return (graph, graph_nodes_kd)
+
+    # def plot_vedges(self, edges):
+    #     grid = self.create_grid()
+    #     im = Image.fromarray(np.uint8(grid) * 255)
+    #     # im = Image.fromarray(np.uint8(np.flip(grid, 0) * 255))
+        
+    #     draw = ImageDraw.Draw(im)
+    #     for y1, x1, y2, x2 in edges:
+    #         draw.line((x1, y1, x2, y2), width = 2)
+
+    #     ima = np.array(im)
+    #     self.plot.show_image(ima)
+
+    #     plt.rcParams["figure.figsize"] = [12, 12]
+
+    #     fig = plt.figure()
+    #     plt.imshow(grid, cmap='Greys', origin='lower')
+
+    #     for y1, x1, y2, x2 in edges:
+    #         plt.plot([x1, x2], [y1, y2])
+        
+    #     plt.show()
+
+    def generate_3dpath(self, local_position, radius = 25):
+        # draw random sample of points in 3d
+        # find the farthest point in the 2d path that is in radius of given 3d path
+        #   and consider that as goal
+        # start location is the current location of the drone
+        # add all random points in a graph
+        # look for a 3d path through the samples using the 2.5d grid as basis for collision
+        # in case the cost of following the 2d path is less than the cost for the 3d
+        # keep on following 2d
+
+        grid25 = self.grid25
+        num_samples = 20
+
+        north_size = int(np.ceil(grid25.north_max - grid25.north_max))
+        east_size = int(np.ceil(grid25.east_max - grid25.east_min))
+
+        radius = 25
+        n_min, n_max = local_position[0] - radius, local_position[0] + radius
+        e_min, e_max = local_position[1] - radius, local_position[1] + radius
+
+        if n_min < 0:
+            n_min = 0
+        if e_min < 0:
+            e_min = 0
+        if n_max > north_size:
+            n_max = north_size
+        if e_max > east_size:
+            e_max = east_size
+
+        nvals = np.random.uniform(n_min, n_max, num_samples).astype(int)
+        evals = np.random.uniform(e_min, e_max, num_samples).astype(int)
+        zvals = np.random.uniform(self.min_drone_altitude, self.max_drone_altitude, num_samples).astype(int)
+
+        samples = list(zip(nvals, evals, zvals))
+
+        t0 = time.time()
+        to_keep = []
+
+        grid25 = self.planner.grid25
+
+        for p in samples:
+            gp = grid25[p[0], p[1]]
+            if gp == 0 and gp < self.max_altitude:
+                to_keep.append(p)
+                    
+        time_taken = time.time() - t0
+        print("Time taken for sample point collision: {0} seconds ...".format(time_taken))
+        print(len(to_keep))
 
     # def point(self, p):
     #     return np.array([p[0], p[1], 1.]).reshape(1, -1)
@@ -200,21 +317,35 @@ class Planner():
                         queue.put((queue_cost, next_node))
                 
         if found:
-            # retrace steps
+            # retrace steps. Each node will indicate the cost of 
+            # reaching the goal from that node
             n = goal
-            path_cost = branch[n][0]
-            path.append((goal, 0))
+            path_cost = 0
+            path.append(goal + (path_cost, ))
 
-            while branch[n][1] != start:
-                path.append((branch[n][1], branch[n][0]))
-                n = branch[n][1]
+            while n != start:
+                # Figure out the cost of reaching the Nth node from its parent.
+                # Add the cost of reaching goal from the Nth node to the cost of reaching
+                #  nth from its parent
 
-            path.append((branch[n][1], 0))
+                parent_node = branch[n][1]
+
+                # get cost of reaching Nth node from its parent
+                graph_node = graph[parent_node]
+                weight = graph_node[n]['weight']
+
+                # add the cost of reaching goal from nth to its parent's cost of reaching
+                # to the nth
+                path_cost += weight
+
+                n = parent_node
+                path.append((n[0], n[1], n[2], path_cost))
         else:
             print('**********************')
             print('Failed to find a path!')
             print('**********************') 
-        return path[::-1], path_cost
+
+        return path[::-1]
 
     def prune_path(self, pp):
         if pp is None or len(pp) < 4:
@@ -224,20 +355,22 @@ class Planner():
         
         p1 = pp[0]
         p2 = pp[1]
-        p3 = pp[2]
-
-        print(p1)
-        print(p2)
-        print(p3)
 
         pruned_path.append(p1)
 
         for i in range(2, len(pp)):
             p3 = pp[i]
-            if self.collinearity_check(p1[0], p2[0], p3[0]):
+
+            p1_ned = (p1[0], p1[1], p1[2])
+            p2_ned = (p2[0], p2[1], p2[2])
+            p3_ned = (p3[0], p3[1], p3[2])
+
+            if self.collinearity_check(p1_ned, p2_ned, p3_ned):
+                #print("Colinear (therefore skipping): ", p1_ned, p2_ned, p3_ned)
                 p2 = p3
             else:
                 pruned_path.append(p2)
+
                 p1 = p2
                 p2 = p3
         
@@ -252,10 +385,10 @@ class Planner():
 
     def get_voronoi_edges(self):
         """returns voronoi edges in the image coordinates"""
-        # create 0 based north, east as voronoi can't work on < 0 indices
-        north_min = self.north_min
-        east_min = self.east_min
+        north_min = self.worldmap.north_min
+        east_min = self.worldmap.east_min
 
+        # Make all data points 0 based instead of from -316  as voronoi can't work on < 0 indices
         north = self.worldmap.data[:, 0] - north_min
         east = self.worldmap.data[:, 1] - east_min
         
@@ -272,13 +405,16 @@ class Planner():
         out_of_bounds = np.where(nob | eob)
         vertices[out_of_bounds] = np.array([-1, -1])
         
+        grid25 = self.worldmap.grid25
+
         # set all vertices that are > grid max to -1,-1
-        nob = vertices[:, 0] >= self.worldmap.grid_size[0]
-        eob = vertices[:, 1] >= self.worldmap.grid_size[1]
+        nob = vertices[:, 0] >= grid25.shape[0]
+        eob = vertices[:, 1] >= grid25.shape[1]
         out_of_bounds = np.where(nob | eob)
         vertices[out_of_bounds] = np.array([-1, -1])
         
-        grid = self.worldmap.create_grid_forheight(self.min_drone_altitude)
+        # create a binary grid given the drone_altitude
+        grid = grid25.create_binary(self.min_drone_altitude)
         edges = []
         
         for e in vgraph.ridge_vertices:
@@ -300,9 +436,10 @@ class Planner():
                         break
 
             if not collision:
-                edges.append((p1, p2))
+                #edges.append((p1, p2))
+                edges.append([p1[0], p1[1], p2[0], p2[1]])
         
-        return edges
+        return np.array(edges)
 
 
 if __name__ == "__main__":
@@ -370,44 +507,29 @@ if __name__ == "__main__":
         
         plt.show()
 
-    def test_graph():
-        print('test_graph')
+    def test_prune():
+        print('test_prune')
+        lon0 = -122.397450
+        lat0 = 37.792480
+
+        global_home = (lon0, lat0, 0)
+
+        start = (0,0,0)
+        goal_gps = GpsLocation(37.794948, -122.396666, 0)
+        goal = global_to_local(goal_gps, global_home)
+
+        print('Start: ', start)
+        print('Goal: ', goal)
+
+        planner.load_map()
         grid = planner.create_grid()
 
-        print('Creating graph...')
-        g = planner.create_voronoi_graph()
+        s = time.time()
+        path2d = planner.plan_route(start, goal)
+        e = time.time()
+        print("Pruned path. Cost: {}, time taken: {}".format(path2d[0][3], e - s))
 
-        n_min = planner.north_min
-        e_min = planner.east_min
-
-        # print('Plotting graph...')
-
-        # fig = plt.figure()
-        # plt.imshow(grid, cmap='Greys', origin='lower')
-
-        # for (n1, n2) in g.edges:
-        #     n1_i = (n1[0] - n_min, n1[1] - e_min)
-        #     n2_i = (n2[0] - n_min, n2[1] - e_min)
-            
-        #     plt.plot([n1_i[1], n2_i[1]], [n1_i[0], n2_i[0]], color='blue')
-
-        # plt.show()
-        s = []
-        for n in g.nodes:
-            s = n
-            break
-
-        print('Looking for ', s)
-        # print(type(g.nodes))
-        t = KDTree(g.nodes)
-        print(t.query(s, k = 2))
-        
-        # s = (-n_min, -e_min)
-        # print('Trying to find nearest of start state: ', s)
-        # print(planner.graph_nodes_kd.query(s, k = 5))
-    
-    test_graph()
-    #est_plan_route()
+    test_prune()
 
     # --- show grid
     #p = Plot()

@@ -1,88 +1,106 @@
 # FCND - 3D Motion Planning
+
 ![Quad Image](./misc/enroute.png)
 
 
 
-This project is a continuation of the Backyard Flyer project where you executed a simple square shaped flight path. In this project you will integrate the techniques that you have learned throughout the last several lessons to plan a path through an urban environment. Check out the [project rubric](https://review.udacity.com/#!/rubrics/1534/view) for more detail on what constitutes a passing submission.
+## Ruberic Points
 
-## Option to do this project in a GPU backed virtual machine in the Udacity classroom!
-Rather than downloading the simulator and starter files you can simply complete this project in a virual workspace in the Udacity classroom! Follow [these instructions](https://classroom.udacity.com/nanodegrees/nd787/parts/5aa0a956-4418-4a41-846f-cb7ea63349b3/modules/0c12632a-b59a-41c1-9694-2b3508f47ce7/lessons/5f628104-5857-4a3f-93f0-d8a53fe6a8fd/concepts/ab09b378-f85f-49f4-8845-d59025dd8a8e?contentVersion=1.0.0&contentLocale=en-us) to proceed with the VM. 
+### Ruberic Point #1 (Explain Starter Code)
 
-## To complete this project on your local machine, follow these instructions:
-### Step 1: Download the Simulator
-This is a new simulator environment!  
+#### State Diagram
 
-Download the Motion-Planning simulator for this project that's appropriate for your operating system from the [simulator releases respository](https://github.com/udacity/FCND-Simulator-Releases/releases).
+For this project, I have used my own implementation carried forward from the Backyard Flyer project. The major difference is in the way state diagrams have been implemented. All of the state diagram code resides in one function `create_state_diagram`. Each node of the state diagram is specified using `state_diagram.add` and the definition includes:
 
-### Step 2: Set up your Python Environment
-If you haven't already, set up your Python environment and get all the relevant packages installed using Anaconda following instructions in [this repository](https://github.com/udacity/FCND-Term1-Starter-Kit)
+- State Name   
+- Callback function to check tansition   
+- Result of the callback -> Transition Function   
 
-### Step 3: Clone this Repository
-```sh
-git clone https://github.com/udacity/FCND-Motion-Planning
+e.g.
+
 ```
-### Step 4: Test setup
-The first task in this project is to test the [solution code](https://github.com/udacity/FCND-Motion-Planning/blob/master/backyard_flyer_solution.py) for the Backyard Flyer project in this new simulator. Verify that your Backyard Flyer solution code works as expected and your drone can perform the square flight path in the new simulator. To do this, start the simulator and run the [`backyard_flyer_solution.py`](https://github.com/udacity/FCND-Motion-Planning/blob/master/backyard_flyer_solution.py) script.
-
-```sh
-source activate fcnd # if you haven't already sourced your Python environment, do so now.
-python backyard_flyer_solution.py
-```
-The quad should take off, fly a square pattern and land, just as in the previous project. If everything functions as expected then you are ready to start work on this project. 
-
-### Step 5: Inspect the relevant files
-For this project, you are provided with two scripts, `motion_planning.py` and `planning_utils.py`. Here you'll also find a file called `colliders.csv`, which contains the 2.5D map of the simulator environment. 
-
-### Step 6: Explain what's going on in  `motion_planning.py` and `planning_utils.py`
-
-`motion_planning.py` is basically a modified version of `backyard_flyer.py` that leverages some extra functions in `planning_utils.py`. It should work right out of the box.  Try running `motion_planning.py` to see what it does. To do this, first start up the simulator, then at the command line:
- 
-```sh
-source activate fcnd # if you haven't already sourced your Python environment, do so now.
-python motion_planning.py
+state_diagram.add(States.PLANNING, MsgID.STATE, 
+                        lambda: self.plan_status,
+                        PlanResult.PLAN_SUCCESS, self.takeoff_transition,
+                        PlanResult.PLAN_FAILED, self.disarming_transition)
 ```
 
-You should see the quad fly a jerky path of waypoints to the northeast for about 10 m then land.  What's going on here? Your first task in this project is to explain what's different about `motion_planning.py` from the `backyard_flyer_solution.py` script, and how the functions provided in `planning_utils.py` work. 
+The state name is `States.PLANNING`, callback function is `MsgId.STATE`, callback function is a lambda that checks if a plan has been found (PlanResult.PLAN_SUCCESS) then it will transit to `takeoff_transition` otherwise it will go to `disarming_tansition`.
 
-### Step 7: Write your planner
+#### Data Columns
 
-Your planning algorithm is going to look something like the following:
+Data read from the colliders.csv has the following columns:
 
-- Load the 2.5D map in the `colliders.csv` file describing the environment.
-- Discretize the environment into a grid or graph representation.
-- Define the start and goal locations. You can determine your home location from `self._latitude` and `self._longitude`. 
-- Perform a search using A* or other search algorithm. 
-- Use a collinearity test or ray tracing method (like Bresenham) to remove unnecessary waypoints.
-- Return waypoints in local ECEF coordinates (format for `self.all_waypoints` is [N, E, altitude, heading], where the drone’s start location corresponds to [0, 0, 0, 0]). 
+| Column | Description|
+|-|-|
+|data[:, 0]| specifies the x (north) of the center of the obstacle|
+|data[:, 1]| specifies the y (east) of the center of the obstacle|
+|data[:, 2]| specifies the z coordinate of the center of the obstacle|
+|data[:, 3]| is the half north side distance of the obstacle|
+|data[:, 4]| is the half east side distance of the obstacle|
+|data[:, 5]| is the half height of the obstacle|
 
-Some of these steps are already implemented for you and some you need to modify or implement yourself.  See the [rubric](https://review.udacity.com/#!/rubrics/1534/view) for specifics on what you need to modify or implement.
+Each data point is relative to the home location specified on the first line of the data file. In this particular case it is lat: 37.792480, lon: -122.397450
 
-### Step 8: Write it up!
-When you're finished, complete a detailed writeup of your solution and discuss how you addressed each step. You can use the [`writeup_template.md`](./writeup_template.md) provided here or choose a different format, just be sure to describe clearly the steps you took and code you used to address each point in the [rubric](https://review.udacity.com/#!/rubrics/1534/view). And have fun!
+#### How is a plan created
 
-## Extra Challenges
-The submission requirements for this project are laid out in the rubric, but if you feel inspired to take your project above and beyond, or maybe even keep working on it after you submit, then here are some suggestions for interesting things to try.
+When the drone is in the ARMED state, the code transits to PLANNING state (`planning_transition`). Following helper classes have been written to help in planning:
 
-### Try flying more complex trajectories
-In this project, things are set up nicely to fly right-angled trajectories, where you ascend to a particular altitude, fly a path at that fixed altitude, then land vertically. However, you have the capability to send 3D waypoints and in principle you could fly any trajectory you like. Rather than simply setting a target altitude, try sending altitude with each waypoint and set your goal location on top of a building!
+|Class Name  |Description|
+|------------|-----------|
+|GpsLocation |Represents Latitude, Longitude and Altitude (makes it easier not to confuse, lon and lat)|
+|WorldMap |Loads data from colliders.csv, gets home location and then creates grid using Grid25 class|
+|Grid25|A two dimensional np.array representation of the data in grid form. Each entry holds the height of the obstacle|
+|Grid3d|A voxel based representation of the data|
+|Planner|A*, Voronoi, KD Tree etc. are all used by the planner to plan a path from start to the goal state|
 
-### Adjust your deadbands
-Adjust the size of the deadbands around your waypoints, and even try making deadbands a function of velocity. To do this, you can simply modify the logic in the `local_position_callback()` function.
+### Ruberic Point #2 (Reading Home Location)
 
-### Add heading commands to your waypoints
-This is a recent update! Make sure you have the [latest version of the simulator](https://github.com/udacity/FCND-Simulator-Releases/releases). In the default setup, you're sending waypoints made up of NED position and heading with heading set to 0 in the default setup. Try passing a unique heading with each waypoint. If, for example, you want to send a heading to point to the next waypoint, it might look like this:
+WorldMap::load (planning_utils.py) reads the first line of the data file and then uses regular expression to read the latitude and longitude
 
-```python
-# Define two waypoints with heading = 0 for both
-wp1 = [n1, e1, a1, 0]
-wp2 = [n2, e2, a2, 0]
-# Set heading of wp2 based on relative position to wp1
-wp2[3] = np.arctan2((wp2[1]-wp1[1]), (wp2[0]-wp1[0]))
+```
+with open(self.filename) as f:
+    line = f.readline()
+    m = re.match('lat0\s(.*),\slon0\s(.*)', line)
 ```
 
-This may not be completely intuitive, but this will yield a yaw angle that is positive counterclockwise about a z-axis (down) axis that points downward.
+#### Start Location
 
-Put all of these together and make up your own crazy paths to fly! Can you fly a double helix?? 
-![Double Helix](./misc/double_helix.gif)
+In the `planning_transition` function, current global position is read using `self.global_position`, which in turn reads (self._longitude, self._latitude, self._altitude), then it is converted to local position using `global_to_local`
 
-Ok flying a double helix might seem like a silly idea, but imagine you are an autonomous first responder vehicle. You need to first fly to a particular building or location, then fly a reconnaissance pattern to survey the scene! Give it a try!
+
+#### Goal Location
+
+I used google maps to pin point the center of the map and then chose a goal location that is on top of a building [Google Map Link](https://goo.gl/maps/vAw9Hj2sjo82)
+
+
+## Overall Planning Process
+
+- Planner (defined in planner.py) object is created 
+- Planner::load_map loads the data and the initial home position
+- Global home is set using `set_home_position`
+- Start and goal locations in local coordinate space are created
+- Planner is asked to generate a route using `plan_route` (Planner.py line # 84)
+* Planner create a 2d path through the grid:
+    - Create **voronoi_graph**
+    - Create **KDTree of voronoi edges**
+    - Find the **closest** node to the **start** state
+    - Find the **closest** node to the **goal** state
+    - **A-Star is run** on the graph to find a path from the start to the goal state
+    - Path returned is pruned using **colinearity checks**
+    - If the closest node to goal is > 0.1m away, **it calls ActionPlanner** (defined in action_based_plan.py)
+        - Action planner tries to find a path from the **goal to the closest goal**
+        - It uses **CubicAction**, which includes **changing altitude as part of action** in addition to changing the xy location
+        - If an action plan can be found, it is added at the end of the planned route from voronoi
+
+# Differences from Udacity Implementation
+
+- Each node of the path also includes the cost of reaching the goal from that node
+- Grid25 / Grid3d classes represent the grid
+- Planner is a seperate class used for planning
+- Wherever possible, instead of loops, direct np.array indices have been used
+
+# Shortcomings
+
+- My original plan was to create a receding horizon algorithm where by initial 2d path would have been computed and then a 3d map would have been used. But due to shortage of time could not implement that.
+- In case the drone starts off from a node that is not on the voronoi edges, the algorithm does not go to ActionPlanner directly and gets stuck
