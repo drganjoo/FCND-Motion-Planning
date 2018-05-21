@@ -87,33 +87,35 @@ The following is a detailed list of steps:
 ![Start and Goal](./misc/start_goal.png)
 
 - Planner is asked to generate a route using `plan_route` (Planner.py line # 84)
-* Planner create a 2d path through the grid using drone's minimum height (5m):
-    - Creates **voronoi edges** using Voronoi.ridge_vertices. These are created using `Voronoi` and then using `bresenham` to exclude colliding edges
+- Planner create a 2d path through the grid using drone's minimum height (5m)
+- Using 2d grid map, `Voronoi` is used to create edges. Then `bresenham` is used to remove edges that collide with obstacles.
 
 ![Voronoi Edges](./misc/voronoi.png)
 
-    - Creates a Graph of **voronoi edges**. It uses euclidean distance as the weight of edges (planner.py line # 172). A **KDTree of voronoi nodes** is created to find closest goal / start states
-
-Nodes:
+- Creates a Graph of **voronoi edges** using `ridge_vertices`. It uses euclidean distance as the weight of edges (planner.py line # 172). 
+- A **KDTree of voronoi nodes** is created to help in finding closest goal / start states
 
 ![Voronoi Graph Nodes](./misc/voronoi_nodes.png)
 
-    - Find the **closest** node to the **start** state
-    - Find the **closest** node to the **goal** state
+- Since the final goal can be on top of a building, which would not be reachable through the Voronoi edges, a close by goal node is found and a path from start to the closeby goal is created. Once such a path has been found, ActionPlanner is used for creating an action based plan to reach from the closest goal to the actual goal on top of the building.
 
 *Green is the closest* node to the goal
 
 ![Closest](./misc/closest.png)
 
-    - **A-Star is run** on the graph to find a path from the start to the closest goal state in 2d grid
-    - Path returned is pruned using **colinearity checks**
+- **A-Star is run** on the graph to find a path from the start to the closest goal state in 2D grid
+- Path returned is pruned using **colinearity checks**
 
 ![2dpath](./misc/2dpath.png)
 
-    - If the closest node to goal is > 0.1m away, **it calls ActionPlanner** (defined in action_based_plan.py)
-        - Action planner tries to find a path from the **original goal to the closest goal**
-        - It uses **CubicAction**, which includes **changing altitude as part of action** in addition to changing the xy location
-        - If an action plan can be found, it is added at the end of the planned route from voronoi
+- If the closest node to goal is > 0.1m away, **ActionPlanner** is called (defined in action_based_plan.py)
+- Action planner tries to find a path from the **original goal** to the **closest goal**
+- It uses **CubicAction**, which includes **changing altitude as part of action** in addition to changing the xy location
+- If an action plan can be found, it is added at the end of the planned route from voronoi
+
+![finalpath](./misc/finalpath.png)
+
+- While following the plan, a deadband of 5 is used but while landing, specially on top of a building, this deadband is reduced. Therefore along with the plan, if the ActionPlanner was used, index of the node before the ActionPlanner nodes have been added is also returned. motion_planning.py Line # 285 (`waypoint_transition`) is the function that sets the dead band based on whether action plan is for landing sequence or not. Line # 320 (`is_close_to_current`) uses the defined dead_band to decide if waypoint has been reached. 
 
 # Differences from Udacity Implementation
 
