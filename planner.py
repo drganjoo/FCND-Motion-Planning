@@ -480,8 +480,8 @@ if __name__ == "__main__":
 
         print('Voronoi edges computed. Length: ', len(edges))
 
-        n_min = planner.north_min
-        e_min = planner.east_min
+        n_min = planner.worldmap.north_min
+        e_min = planner.worldmap.east_min
         
         fig = plt.figure()
         plt.subplot(121)

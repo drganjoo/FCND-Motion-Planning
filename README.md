@@ -1,8 +1,7 @@
 # FCND - 3D Motion Planning
 
 ![Quad Image](./misc/enroute.png)
-
-
+![Video](./misc/flight.mp4)
 
 ## Ruberic Points
 
@@ -42,7 +41,7 @@ Data read from the colliders.csv has the following columns:
 
 Each data point is relative to the home location specified on the first line of the data file. In this particular case it is lat: 37.792480, lon: -122.397450
 
-#### How is a plan created
+#### When is the plan created
 
 When the drone is in the ARMED state, the code transits to PLANNING state (`planning_transition`). Following helper classes have been written to help in planning:
 
@@ -76,20 +75,43 @@ I used google maps to pin point the center of the map and then chose a goal loca
 
 ## Overall Planning Process
 
+The basic idea was to use a 2d graph using Voronoi at a constant flight height. In case the goal state lied on the graph it would have been sufficient but if the goal state does not lie on the 2d graph then an action based plan is employed to use different altitude to reach the goal state.
+
+The following is a detailed list of steps:
+
 - Planner (defined in planner.py) object is created 
-- Planner::load_map loads the data and the initial home position
+- `Planner::load_map` loads the data and the initial home position
 - Global home is set using `set_home_position`
 - Start and goal locations in local coordinate space are created
+
+![Start and Goal](./misc/start_goal.png)
+
 - Planner is asked to generate a route using `plan_route` (Planner.py line # 84)
-* Planner create a 2d path through the grid:
-    - Create **voronoi_graph**
-    - Create **KDTree of voronoi edges**
+* Planner create a 2d path through the grid using drone's minimum height (5m):
+    - Creates **voronoi edges** using Voronoi.ridge_vertices. These are created using `Voronoi` and then using `bresenham` to exclude colliding edges
+
+![Voronoi Edges](./misc/voronoi.png)
+
+    - Creates a Graph of **voronoi edges**. It uses euclidean distance as the weight of edges (planner.py line # 172). A **KDTree of voronoi nodes** is created to find closest goal / start states
+
+Nodes:
+
+![Voronoi Graph Nodes](./misc/voronoi_nodes.png)
+
     - Find the **closest** node to the **start** state
     - Find the **closest** node to the **goal** state
-    - **A-Star is run** on the graph to find a path from the start to the goal state
+
+*Green is the closest* node to the goal
+
+![Closest](./misc/closest.png)
+
+    - **A-Star is run** on the graph to find a path from the start to the closest goal state in 2d grid
     - Path returned is pruned using **colinearity checks**
+
+![2dpath](./misc/2dpath.png)
+
     - If the closest node to goal is > 0.1m away, **it calls ActionPlanner** (defined in action_based_plan.py)
-        - Action planner tries to find a path from the **goal to the closest goal**
+        - Action planner tries to find a path from the **original goal to the closest goal**
         - It uses **CubicAction**, which includes **changing altitude as part of action** in addition to changing the xy location
         - If an action plan can be found, it is added at the end of the planned route from voronoi
 
@@ -102,5 +124,7 @@ I used google maps to pin point the center of the map and then chose a goal loca
 
 # Shortcomings
 
-- My original plan was to create a receding horizon algorithm where by initial 2d path would have been computed and then a 3d map would have been used. But due to shortage of time could not implement that.
+- Better culling alogrithm should be used to go through a more straighter route than the one followed.
 - In case the drone starts off from a node that is not on the voronoi edges, the algorithm does not go to ActionPlanner directly and gets stuck
+- When the closest goal state is looked for, there are times that the closest node returned from the Voronoi does not have a path from start to that location. This can be overcome by using a radius of closest points or maybe first by finding out a non obstructed closeby region and then using a point in there.
+- My original plan was to create a receding horizon algorithm where by initial 2d path would have been computed and then a probabilistic roadmap would have been used. But due to shortage of time could not implement that.
