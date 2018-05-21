@@ -1,7 +1,8 @@
 # FCND - 3D Motion Planning
 
 ![Quad Image](./misc/enroute.png)
-![Video](./misc/flight.mp4)
+
+[Video of motion planning in action](./misc/flight.mp4)
 
 ## Ruberic Points
 
