@@ -103,7 +103,9 @@ The following is a detailed list of steps:
 
 ![finalpath](./misc/finalpath.png)
 
-- While following the plan, a deadband of 5 is used but while landing, specially on top of a building, this deadband is reduced. Therefore along with the plan, if the ActionPlanner was used, index of the node before the ActionPlanner nodes have been added is also returned. motion_planning.py Line # 285 (`waypoint_transition`) is the function that sets the dead band based on whether action plan is for landing sequence or not. Line # 320 (`is_close_to_current`) uses the defined dead_band to decide if waypoint has been reached. 
+- While following the plan, a deadband of 5 is used but while landing, specially on top of a building, this deadband is reduced. Therefore the caller of `plan_route` is also told about the waypoint after, which landing sequence starts. 
+
+- motion_planning.py Line # 285 (`waypoint_transition`) is the function that sets the dead band based on whether action plan is for landing sequence or not. Line # 320 (`is_close_to_current`) uses the defined dead_band to decide if waypoint has been reached. 
 
 # Differences from Udacity Implementation
 
