@@ -35,7 +35,7 @@ When the drone is in the ARMED state, the code transits to PLANNING state (`plan
 |------------|-----------|
 |GpsLocation |Represents Latitude, Longitude and Altitude (makes it easier not to confuse, lon and lat)|
 |WorldMap |Loads data from colliders.csv, gets home location and then creates grid using Grid25 class|
-|Grid25|A two dimensional np.array representation of the data in grid form. Each entry holds the height of the obstacle. Since grid25d is 0 based, a function `get_map_coord` has been provided to check obstacles based on world map based coordinate space (-ve values are allowed w.r.t to the home position)|
+|Grid25|A two dimensional np.array representation of the data in grid form. Each entry holds the height of the obstacle. Since grid25d is 0 based, a function `get_map_coord` has been provided to check obstacles based on world map based coordinate space (In the world map coordinate space, -ve values are allowed w.r.t to the home position)|
 |Grid3d|A voxel based representation of the data|
 |Planner|A*, Voronoi, KD Tree etc. are all used by the planner to plan a path from start to the goal state|
 
@@ -53,7 +53,7 @@ with open(self.filename) as f:
 
 #### Start Location
 
-In the `planning_transition` function, current global position is read using `self.global_position`, which in turn reads (self._longitude, self._latitude, self._altitude), then it is converted to local position using `global_to_local`
+In the `planning_transition` function, current global position is read using `self.global_position`, which in turn reads (self._longitude, self._latitude, self._altitude), then it is converted to local position using `global_to_local` with respect to the global home set earlier.
 
 
 #### Goal Location
