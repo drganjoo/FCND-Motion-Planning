@@ -125,6 +125,8 @@ Nodes:
 # Shortcomings
 
 - Better culling alogrithm should be used to go through a more straighter route than the one followed.
-- In case the drone starts off from a node that is not on the voronoi edges, the algorithm does not go to ActionPlanner directly and gets stuck
-- When the closest goal state is looked for, there are times that the closest node returned from the Voronoi does not have a path from start to that location. This can be overcome by using a radius of closest points or maybe first by finding out a non obstructed closeby region and then using a point in there.
+- The landing spot needs to be checked to make sure drone has enough space to land. If not then choose a nearby bigger spot to land
+- In case the drone starts off from a node that is not on the voronoi edges, the algorithm does not go to ActionPlanner directly and it gets stuck
+- When the closest goal state is looked for, there are times that the closest node returned from the Voronoi does not have a path from start to that location.
+- Close to obstacles, WAYPOINT_HIT_RAIDUS should be decreased as the drone gets off track near the obstacles
 - My original plan was to create a receding horizon algorithm where by initial 2d path would have been computed and then a probabilistic roadmap would have been used. But due to shortage of time could not implement that.

@@ -112,10 +112,9 @@ class Planner():
         
         # prune path
         print('Pruning path...')
+        
         pruned_path = self.prune_path(path)
-
-        # print(pruned_path)
-        # os.process.exit()
+        landing_starts = len(pruned_path)               # this is returned to the motion_planner to decrease WAYPOINT_HIT_RADIUS
 
         print('Path pruned. Length: ', len(pruned_path))
 
@@ -132,15 +131,17 @@ class Planner():
 
             if len(path) > 0:
                 # print('adding action based plan at the end of the pruned path')
-                print('Action Path: ', path)
+                pruned_action_path = self.prune_path(path)
+                print('Action Path: ', pruned_action_path)
+
                 # print('Before adding pruned path:', pruned_path)
 
-                pruned_path.extend(path)
+                pruned_path.extend(pruned_action_path)
 
                 # print('-' * 100)
                 # print(pruned_path)
 
-        return pruned_path
+        return pruned_path, landing_starts
 
 
     def create_grid(self):

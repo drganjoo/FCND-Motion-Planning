@@ -37,7 +37,10 @@ class MotionPlanning(Drone):
     def __init__(self, connection):
         super().__init__(connection)
 
-        self.WAYPOINT_HIT_RADIUS = 5.0
+        self.WAYPOINT_HIT_RADIUS_DURING = 5.0
+        self.WAYPOINT_HIT_RADIUS_LANDING = 2.0
+
+        self.waypoint_hit_radius = self.WAYPOINT_HIT_RADIUS_DURING
 
         self.in_mission = True
         self.takeoff_altitude = 3.0
@@ -58,6 +61,8 @@ class MotionPlanning(Drone):
 
         self.path2d_with_cost = []              # 2d path returned by the planner. This has the cost
                                                 # of reaching goal from each state. Is used for 3d planning
+
+        self.landing_waypoint_index = 0         # index in the waypoints where landing starts. This is used for decreasing the WAYPOINT_HIT_RADIUS
 
         super().register_callback(MsgID.GLOBAL_POSITION, self.record_initial_gps)
     
@@ -134,7 +139,7 @@ class MotionPlanning(Drone):
         # get a pruned, a_starred path from the planner
         
         print('Finding a plan...')
-        self.path2d_with_cost = self.planner.plan_route(start, goal)
+        self.path2d_with_cost, self.landing_waypoint_index = self.planner.plan_route(start, goal)
 
         # fig = plt.figure()
         # grid = self.planner.create_grid()
@@ -155,12 +160,7 @@ class MotionPlanning(Drone):
             print("Could not plan a path for the given start and goal state")
             self.plan_status = PlanResult.PLAN_FAILED
 
-        #self.generate_3dpath()
-        # self.plan_status = PlanResult.PLAN_FAILED
-
-        # debug
-        # self.all_waypoints = np.array([start, goal])
-        # self.send_waypoints()
+        self.waypoint_hit_radius = self.WAYPOINT_HIT_RADIUS_DURING
         #self.plan_status = PlanResult.PLAN_SUCCESS
         
     def record_initial_gps(self):
@@ -274,16 +274,15 @@ class MotionPlanning(Drone):
 
             heading = self.calculate_heading(owp, self.current_waypoint)
 
-            # (y2 - y1) / (x2 - x1) (conver to radians)
-            #vector_other_pt = (self.current_waypoint[1] - owp[1])/(self.current_waypoint[0] - owp[0])
-
             self.cmd_position(self.current_waypoint[0], 
                             self.current_waypoint[1], 
                             -self.current_waypoint[2], 
                             heading)
+
             self.flight_state = States.WAYPOINT
             
-            #print("transit to waypoint: ", self.current_waypoint)
+            if self.current_wp_index > self.landing_waypoint_index:
+                self.waypoint_hit_radius = self.WAYPOINT_HIT_RADIUS_LANDING
         else:
             self.current_waypoint = None
 
@@ -327,7 +326,7 @@ class MotionPlanning(Drone):
                     (self.current_waypoint[2] - pos[2]) ** 2) ** 0.5
 
         # print('is_close_to_current: ', self.local_position, self.current_waypoint, distance)
-        return distance < self.WAYPOINT_HIT_RADIUS
+        return distance < self.waypoint_hit_radius
 
     def start(self):
         # no point in creating a log file, telemetry log is created by parent drone class
