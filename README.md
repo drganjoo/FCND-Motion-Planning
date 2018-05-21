@@ -63,7 +63,7 @@ I used google maps to pin point the center of the map and then chose a goal loca
 
 ## Overall Planning Process
 
-The basic idea was to use a 2d graph using Voronoi at a constant flight height. In case the goal state lied on the graph it would have been sufficient but if the goal state does not lie on the 2d graph then an action based plan is employed to use different altitude to reach the goal state.
+The basic idea was to build a 2d path using Voronoi at a constant flight height. However there was a chance that the goal node does not lie on the voronoi edges in, which case the 2D path won't be able to find it. This was specially true if the goal state was on top of a building. In order to fix this, a nearby goal state (that lies on the voronoi edges) is chosen as a temporary goal; a path is found from start to the close by goal and then an action based plan is invoked to find a final path from the close by goal node to the actual goal node.
 
 The following is a detailed list of steps:
 
