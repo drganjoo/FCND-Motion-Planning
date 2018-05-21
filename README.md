@@ -27,21 +27,6 @@ state_diagram.add(States.PLANNING, MsgID.STATE,
 
 The state name is `States.PLANNING`, callback function is `MsgId.STATE`, callback function is a lambda that checks if a plan has been found (PlanResult.PLAN_SUCCESS) then it will transit to `takeoff_transition` otherwise it will go to `disarming_tansition`.
 
-#### Data Columns
-
-Data read from the colliders.csv has the following columns:
-
-| Column | Description|
-|-|-|
-|data[:, 0]| specifies the x (north) of the center of the obstacle|
-|data[:, 1]| specifies the y (east) of the center of the obstacle|
-|data[:, 2]| specifies the z coordinate of the center of the obstacle|
-|data[:, 3]| is the half north side distance of the obstacle|
-|data[:, 4]| is the half east side distance of the obstacle|
-|data[:, 5]| is the half height of the obstacle|
-
-Each data point is relative to the home location specified on the first line of the data file. In this particular case it is lat: 37.792480, lon: -122.397450
-
 #### When is the plan created
 
 When the drone is in the ARMED state, the code transits to PLANNING state (`planning_transition`). Following helper classes have been written to help in planning:
@@ -50,11 +35,13 @@ When the drone is in the ARMED state, the code transits to PLANNING state (`plan
 |------------|-----------|
 |GpsLocation |Represents Latitude, Longitude and Altitude (makes it easier not to confuse, lon and lat)|
 |WorldMap |Loads data from colliders.csv, gets home location and then creates grid using Grid25 class|
-|Grid25|A two dimensional np.array representation of the data in grid form. Each entry holds the height of the obstacle|
+|Grid25|A two dimensional np.array representation of the data in grid form. Each entry holds the height of the obstacle. Since grid25d is 0 based, a function `get_map_coord` has been provided to check obstacles based on world map based coordinate space (-ve values are allowed w.r.t to the home position)|
 |Grid3d|A voxel based representation of the data|
 |Planner|A*, Voronoi, KD Tree etc. are all used by the planner to plan a path from start to the goal state|
 
-### Ruberic Point #2 (Reading Home Location)
+### Ruberic Point #2 
+
+#### Reading Home Location
 
 WorldMap::load (planning_utils.py) reads the first line of the data file and then uses regular expression to read the latitude and longitude
 
@@ -133,3 +120,20 @@ The following is a detailed list of steps:
 - When the closest goal state is looked for, there are times that the closest node returned from the Voronoi does not have a path from start to that location.
 - Close to obstacles, WAYPOINT_HIT_RAIDUS should be decreased as the drone gets off track near the obstacles
 - My original plan was to create a receding horizon algorithm where by initial 2d path would have been computed and then a probabilistic roadmap would have been used. But due to shortage of time could not implement that.
+
+#### Notes about colliders.csv
+
+First line of colliders.csv holds the latitude and longitude with respect to which the rest of the file's coordinates have been recorded. 
+
+Data read from the colliders.csv has the following columns:
+
+| Column | Description|
+|-|-|
+|data[:, 0]| specifies the x (north) of the center of the obstacle|
+|data[:, 1]| specifies the y (east) of the center of the obstacle|
+|data[:, 2]| specifies the z coordinate of the center of the obstacle|
+|data[:, 3]| is the half north side distance of the obstacle|
+|data[:, 4]| is the half east side distance of the obstacle|
+|data[:, 5]| is the half height of the obstacle|
+
+Each data point is relative to the home location specified on the first line of the data file. In the given file home position is set to lat: 37.792480, lon: -122.397450
