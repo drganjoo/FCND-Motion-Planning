@@ -2,7 +2,7 @@
 
 ![Quad Image](./misc/enroute.png)
 
-[Video of motion planning in action](./misc/flight.mp4)
+[Video of motion planning in action](./misc/flight-small.mp4)
 
 ## Ruberic Points
 
